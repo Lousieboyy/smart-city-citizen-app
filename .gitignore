@@ -1,0 +1,17 @@
+# Python
+ai_backend/.venv/
+ai_backend/__pycache__/
+*.pyc
+
+# Flutter
+mobile_frontend/build/
+mobile_frontend/.dart_tool/
+mobile_frontend/.flutter-plugins
+mobile_frontend/.flutter-plugins-dependencies
+
+# AI Models (Optional - if they are >100MB)
+*.h5
+
+# OS Files
+.DS_Store
+Thumbs.db
