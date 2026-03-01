@@ -1,0 +1,5 @@
+0 drainage
+1 normal
+2 other
+3 pothole
+4 waste
