@@ -17,41 +17,52 @@ class HomeScreen extends StatelessWidget {
         backgroundColor: Colors.blueAccent,
       ),
       body: Center(
+        child: GridView.count(
+          crossAxisCount:2,
+          crossAxisSpacing: 15,
+          mainAxisSpacing: 15,
+          shrinkWrap: true,
+          padding: EdgeInsets.all(20),
+          children: [
+            _buildMenuCard(
+              context,
+              "Report Issue",
+              Icons.report_problem,
+              Colors.redAccent,
+              const CitizenReportScreen()
+            ),
+            _buildMenuCard(
+              context,
+              "Placeholder", 
+              Icons.alarm, 
+              Colors.blue, 
+              const Placeholder()
+              )
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMenuCard(
+    BuildContext context, 
+    String title, 
+    IconData, 
+    Color color, 
+    Widget screen)
+    {
+    return Card(
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context, 
+          MaterialPageRoute(builder: (context) => screen)
+        ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.location_city, size: 100, color: Colors.blueAccent),
-            const SizedBox(height: 20),
-            const Text(
-              "Welcome, Citizen!",
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const Padding(
-              padding: EdgeInsets.all(20.0),
-              child: Text(
-                "Help us keep our city safe. Report issues like potholes or broken lights directly to the council.",
-                textAlign: TextAlign.center,
-              ),
-            ),
-            const SizedBox(height: 40),
-            
-            // THE BUTTON: This connects to your reporting function/screen
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const CitizenReportScreen()),
-                );
-              },
-              icon: const Icon(Icons.report_problem),
-              label: const Text("Report an Issue"),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20),
-                backgroundColor: Colors.redAccent,
-                foregroundColor: Colors.white,
-                textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
+            Icon(IconData, color: color, size: 40),
+            SizedBox(height: 10),
+            Text(title),
           ],
         ),
       ),
