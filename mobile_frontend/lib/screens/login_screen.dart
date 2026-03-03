@@ -46,12 +46,12 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.lock_person, size: 80, color: Colors.blueAccent),
+              const Icon(Icons.lock_person, size: 80, color: Colors.white),
               const SizedBox(height: 20),
               //Title
               const Text(
                 "Welcome To Decision Support System",
-                style: TextStyle(fontSize:24, fontWeight: FontWeight.bold),
+                style: TextStyle(fontSize:24, fontWeight: FontWeight.bold, color: Colors.white),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),            
@@ -59,19 +59,16 @@ class _LoginScreenState extends State<LoginScreen> {
               TextFormField(
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
+                style: const TextStyle(color: Colors.white),
                 decoration: const InputDecoration(
                   labelText: "Email",
+                  hintText: "citizen@gmail.com",
                   prefixIcon: Icon(Icons.email),
-                  enabledBorder: OutlineInputBorder(
-                    borderSide: BorderSide(color: Colors.black,width: 5.0)
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderSide: BorderSide(color: Colors.blue)
-                  ),
+                  border: OutlineInputBorder(),
                 ),
                 validator: (value) {
                   if (value == null || value.isEmpty) return "Please enter your email";
-                  if (!value.contains('@')) return "Enter a valid email address";
+                  if (!value.contains('@gmail.com')) return "Enter a valid email address";
                   return null;
                 },
               ),
@@ -83,10 +80,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 obscureText: true,
                 decoration: const InputDecoration(
                   labelText: "Password",
+                  hintText: "******",
                   prefixIcon: Icon(Icons.lock),
-                  border: OutlineInputBorder(
-                    borderSide: BorderSide(color: Colors.black,width: 50.0)
-                  ),
+                  border: OutlineInputBorder(),
                 ),
                 validator: (value) {
                   if (value == null || value.length < 6) return "Password must be at least 6 characters";
