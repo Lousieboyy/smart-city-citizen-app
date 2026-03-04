@@ -13,8 +13,29 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Smart City Dashboard"),
-        backgroundColor: Colors.blueAccent,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Welcome Back,", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w400)),
+            Text("User", style: TextStyle(fontSize: 18,fontWeight: FontWeight.bold ))
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Badge(
+              label: Text("3"),
+              child: Icon(Icons.notifications_none),
+            ),
+            onPressed: (){},
+          ),
+          IconButton(
+            icon: const Icon(Icons.person),
+            onPressed: (){},
+          ),
+          const SizedBox(width: 10),
+        ],
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        elevation: 0,
       ),
       body: Center(
         child: GridView.count(
