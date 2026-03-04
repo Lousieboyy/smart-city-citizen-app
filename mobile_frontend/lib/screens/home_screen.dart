@@ -12,14 +12,22 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text("Welcome Back,", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w400)),
-            Text("User", style: TextStyle(fontSize: 18,fontWeight: FontWeight.bold ))
-          ],
-        ),
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(120),
+        child: AppBar(
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.only(
+              bottomLeft: Radius.circular(80),
+              bottomRight: Radius.circular(80)
+            ),
+          ),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+                const Text("Welcome Back,", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w400,)),
+                const Text("User", style: TextStyle(fontSize: 18,fontWeight: FontWeight.bold )),
+            ], 
+          ),
         actions: [
           IconButton(
             icon: const Badge(
@@ -34,16 +42,40 @@ class HomeScreen extends StatelessWidget {
           ),
           const SizedBox(width: 10),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(50),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 15,left: 50, right: 50),
+            child: SizedBox(
+              width: double.infinity,
+              height: 40,
+              child: TextButton.icon(
+                onPressed: (){}, 
+                icon: const Icon(Icons.add, size: 20),
+                label: const Text("Report an Issue"),
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.white24,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(5)
+                  )                ),
+              ),
+            ),
+          ),
+        ),
         backgroundColor: Theme.of(context).colorScheme.primary,
         elevation: 0,
       ),
+    ),
+
       body: Center(
         child: GridView.count(
           crossAxisCount:2,
           crossAxisSpacing: 15,
           mainAxisSpacing: 15,
           shrinkWrap: true,
-          padding: EdgeInsets.all(20),
+          childAspectRatio: 0.8,
+          padding: EdgeInsets.all(50),
           children: [
             _buildMenuCard(
               context,
@@ -53,6 +85,20 @@ class HomeScreen extends StatelessWidget {
               const CitizenReportScreen()
             ),
             _buildMenuCard(
+              context,
+              "Placeholder", 
+              Icons.alarm, 
+              Colors.blue, 
+              const Placeholder()
+            ),
+            _buildMenuCard(
+              context,
+              "Placeholder", 
+              Icons.alarm, 
+              Colors.blue, 
+              const Placeholder()
+              ),
+              _buildMenuCard(
               context,
               "Placeholder", 
               Icons.alarm, 
@@ -83,7 +129,7 @@ class HomeScreen extends StatelessWidget {
           children: [
             Icon(IconData, color: color, size: 40),
             SizedBox(height: 10),
-            Text(title),
+            Text(title)
           ],
         ),
       ),

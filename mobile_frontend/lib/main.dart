@@ -27,6 +27,12 @@ class MyApp extends StatelessWidget {
             borderSide: BorderSide(color: Colors.blue)
           ),
         ),
+        appBarTheme: AppBarTheme(
+          iconTheme: IconThemeData(
+            color: Colors.white,
+          ),
+          titleTextStyle: const TextStyle(color: Colors.white)
+        )
       ),
       // APP STARTS HERE: Login is the first thing they see
       home: const LoginScreen(), 
