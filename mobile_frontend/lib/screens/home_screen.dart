@@ -60,7 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.assignment_outlined),
-            label: 'Reports',
+            label: 'History',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person_outline),
@@ -86,9 +86,9 @@ class DashboardContent extends StatelessWidget {
             children: [
               _buildHeader(context),
               Positioned(
-                bottom: -25,
-                left: 20,
-                right: 20,
+                bottom: -10,
+                left: 30,
+                right: 30,
                 child: _buildMainActionButton(context),
               ),
             ],
@@ -139,7 +139,7 @@ class DashboardContent extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: const [
                   Text("Welcome back,", style: TextStyle(color: Colors.white70, fontSize: 14)),
-                  Text("Ahmad Razak", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                  Text("Mohamad Haikal", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
                 ],
               ),
               const CircleAvatar(
