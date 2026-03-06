@@ -37,10 +37,16 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.primary,
-      // 5. Use SingleChildScrollView to prevent "bottom overflow" when the keyboard appears
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 30.0, vertical: 80.0),
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF01262E), Color(0xFF005F52)], 
+          ),
+        ),
         child: Form(
           key: _formKey,
           child: Column(

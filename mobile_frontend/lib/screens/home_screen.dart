@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'report_screen.dart';
+import 'map_screen.dart';
 
 void main() => runApp(MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -10,58 +11,111 @@ void main() => runApp(MaterialApp(
       home: const HomeScreen(),
     ));
 
-class HomeScreen extends StatelessWidget {
+// 1. Changed to StatefulWidget to handle tab switching
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int _selectedIndex = 0; // Tracks the current active tab
+
+  // 2. List of screens for the navigation
+  static final List<Widget> _widgetOptions = <Widget>[
+    const DashboardContent(), // Your original UI
+    const MapViewScreen(),
+    const Center(child: Text('My Reports', style: TextStyle(fontSize: 24))),
+    const Center(child: Text('Profile', style: TextStyle(fontSize: 24))),
+  ];
+
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF7F8FA),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            // 1. TOP GRADIENT SECTION
-            Stack(
-              clipBehavior: Clip.none,
+      body: _widgetOptions.elementAt(_selectedIndex), // Shows selected screen
+      
+      // --- BOTTOM NAVIGATION BAR ---
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed, // Keeps labels visible for 4 items
+        currentIndex: _selectedIndex,
+        selectedItemColor: const Color(0xFF005F52),
+        unselectedItemColor: Colors.grey,
+        onTap: _onItemTapped,
+        items: const <BottomNavigationBarItem>[
+          BottomNavigationBarItem(
+            icon: Icon(Icons.dashboard_rounded),
+            label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.map_outlined),
+            label: 'Map',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.assignment_outlined),
+            label: 'Reports',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person_outline),
+            label: 'Profile',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// 3. Your original UI moved here to keep things clean
+class DashboardContent extends StatelessWidget {
+  const DashboardContent({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              _buildHeader(context),
+              Positioned(
+                bottom: -25,
+                left: 20,
+                right: 20,
+                child: _buildMainActionButton(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 40),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _buildHeader(context),
-                Positioned(
-                  bottom: -25,
-                  left: 20,
-                  right: 20,
-                  child: _buildMainActionButton(context),
-                ),
+                const Text("Recent Reports",
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                TextButton(onPressed: () {}, child: const Text("View all", style: TextStyle(color: Colors.teal))),
               ],
             ),
-            const SizedBox(height: 40),
-
-            // 2. RECENT REPORTS SECTION
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text("Recent Reports",
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  TextButton(onPressed: () {}, child: const Text("View all", style: TextStyle(color: Colors.teal))),
-                ],
-              ),
-            ),
-
-            _buildReportCard("Pothole on Jalan Ampang", "Road Damage • 2h ago", "In Progress", "High", Colors.orange, Colors.red),
-            _buildReportCard("Broken streetlight at Taman Melati", "Street Lighting • 5h ago", "Submitted", "Medium", Colors.blue, Colors.orange),
-            _buildReportCard("Illegal dumping near Sungai Besi", "Waste Management • 1d ago", "Resolved", "Low", Colors.green, Colors.orange),
-
-            // 3. OVERVIEW SECTION
-            _buildOverviewSection(),
-            const SizedBox(height: 20),
-          ],
-        ),
+          ),
+          _buildReportCard("Pothole on Jalan Ampang", "Road Damage • 2h ago", "In Progress", "High", Colors.orange, Colors.red),
+          _buildReportCard("Broken streetlight at Taman Melati", "Street Lighting • 5h ago", "Submitted", "Medium", Colors.blue, Colors.orange),
+          _buildReportCard("Illegal dumping near Sungai Besi", "Waste Management • 1d ago", "Resolved", "Low", Colors.green, Colors.orange),
+          _buildOverviewSection(),
+          const SizedBox(height: 20),
+        ],
       ),
     );
   }
 
-  // --- HEADER WIDGET ---
+  // --- ALL YOUR HELPER METHODS (COPIED FROM YOUR CODE) ---
   Widget _buildHeader(BuildContext context) {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 60, 20, 60),
@@ -128,7 +182,6 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  // --- MAIN BUTTON ---
   Widget _buildMainActionButton(BuildContext context) {
     return ElevatedButton.icon(
       onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const CitizenReportScreen())),
@@ -142,7 +195,6 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  // --- REPORT LIST ITEM ---
   Widget _buildReportCard(String title, String subtitle, String status, String priority, Color statusCol, Color priorityCol) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
@@ -184,7 +236,6 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  // --- OVERVIEW SECTION ---
   Widget _buildOverviewSection() {
     return Container(
       margin: const EdgeInsets.all(20),
