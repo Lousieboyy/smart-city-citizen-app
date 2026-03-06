@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 
 class CitizenReportScreen extends StatefulWidget {
   const CitizenReportScreen({super.key});
+
   @override
   State<CitizenReportScreen> createState() => _CitizenReportScreenState();
 }
@@ -14,51 +15,44 @@ class CitizenReportScreen extends StatefulWidget {
 class _CitizenReportScreenState extends State<CitizenReportScreen> {
   File? _image;
   final picker = ImagePicker();
-  String _status = "Select a photo to report an urban issue";
   bool _isLoading = false;
-  Color _resultColor = Colors.grey;
-  final TextEditingController _locationController = TextEditingController();
+  String? _selectedCategory;
+  final TextEditingController _descriptionController = TextEditingController();
+  final TextEditingController _locationController = TextEditingController(text: "Fetching location...");
+
+  final List<Map<String, dynamic>> _categories = [
+    {'name': 'Road Damage', 'icon': Icons.construction, 'color': Color(0xFFFFEBEE), 'iconColor': Colors.red},
+    {'name': 'Street Lighting', 'icon': Icons.lightbulb_outline, 'color': Color(0xFFFFF3E0), 'iconColor': Colors.orange},
+    {'name': 'Waste Management', 'icon': Icons.delete_outline, 'color': Color(0xFFE8F5E9), 'iconColor': Colors.green},
+    {'name': 'Drainage', 'icon': Icons.water_drop_outlined, 'color': Color(0xFFE3F2FD), 'iconColor': Colors.blue},
+    {'name': 'Noise Disturbance', 'icon': Icons.volume_up_outlined, 'color': Color(0xFFF5F5F5), 'iconColor': Colors.grey},
+  ];
 
   @override
-  void dispose() {
-    _locationController.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _fetchLocation();
   }
 
   Future<void> _fetchLocation() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      setState(() => _locationController.text = "Please enable GPS services.");
-      return;
+    try {
+      Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      setState(() {
+        _locationController.text = "Jalan Ampang, KL (${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)})";
+      });
+    } catch (e) {
+      setState(() => _locationController.text = "Location unavailable");
     }
-
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        setState(() => _locationController.text = "Location permissions denied.");
-        return;
-      }
-    }
-
-    Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
-    setState(() {
-      _locationController.text = "${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}";
-    });
   }
 
-  Future<void> _pickAndReportImage(ImageSource source) async {
-    final pickedFile = await picker.pickImage(source: source);
+  Future<void> _pickImage() async {
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
       setState(() {
         _image = File(pickedFile.path);
         _isLoading = true;
-        _status = "AI is analyzing the image...";
-        _resultColor = Colors.grey;
-        _locationController.text = "Fetching GPS...";
       });
-      _fetchLocation();
-      _sendToAI(_image!);
+      await _sendToAI(_image!);
     }
   }
 
@@ -70,16 +64,10 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       if (response.statusCode == 200) {
         var responseData = await response.stream.bytesToString();
         var decoded = jsonDecode(responseData);
-        String issueType = decoded['issue_type'].toString();
-        setState(() {
-          _status = "Issue: $issueType\nConfidence: ${decoded['confidence']}";
-          _resultColor = issueType.toLowerCase() == 'normal' ? Colors.green : (issueType.toLowerCase() == 'other' ? Colors.orange : Colors.red);
-        });
-      } else {
-        setState(() => _status = "Server Error: ${response.statusCode}");
+        setState(() => _selectedCategory = decoded['issue_type']);
       }
     } catch (e) {
-      setState(() => _status = "Connection Failed! Check Python server.");
+      debugPrint("AI Connection Failed: $e");
     } finally {
       setState(() => _isLoading = false);
     }
@@ -88,28 +76,173 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("File a Report"), backgroundColor: Colors.blueAccent),
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text("Report an Issue", 
+          style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20.0),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 300, height: 300,
-              decoration: BoxDecoration(border: Border.all(color: _resultColor, width: 5), borderRadius: BorderRadius.circular(15)),
-              child: _image == null ? const Icon(Icons.image_search, size: 80) : Image.file(_image!, fit: BoxFit.cover),
+            _buildSectionTitle("CATEGORY"),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: _categories.map((cat) => _buildCategoryCard(cat)).toList(),
+            ),
+            const SizedBox(height: 25),
+            _buildSectionTitle("DESCRIPTION"),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _descriptionController,
+              maxLines: 4,
+              decoration: InputDecoration(
+                hintText: "Describe the issue in detail...",
+                hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding: const EdgeInsets.all(15),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(15),
+                  borderSide: BorderSide(color: Colors.grey.shade200),
+                ),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+              ),
+            ),
+            const SizedBox(height: 25),
+            _buildSectionTitle("PHOTO EVIDENCE"),
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: _pickImage,
+              child: Container(
+                height: 100,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: Colors.blue.shade50, width: 2),
+                  color: Colors.blue.withOpacity(0.02),
+                ),
+                child: _image == null 
+                  ? Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Icon(Icons.camera_alt_outlined, color: Colors.grey),
+                        SizedBox(width: 8),
+                        Text("Upload Photo", style: TextStyle(color: Colors.grey)),
+                      ],
+                    )
+                  : ClipRRect(
+                      borderRadius: BorderRadius.circular(15),
+                      child: Image.file(_image!, fit: BoxFit.cover),
+                    ),
+              ),
+            ),
+            const SizedBox(height: 25),
+            _buildSectionTitle("LOCATION"),
+            const SizedBox(height: 10),
+            _buildLocationPreview(),
+            const SizedBox(height: 30),
+            SizedBox(
+              width: double.infinity,
+              height: 55,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context), 
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xffa8cfcd),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  elevation: 0,
+                ),
+                child: const Text("Submit Report", 
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
             ),
             const SizedBox(height: 20),
-            TextField(controller: _locationController, decoration: const InputDecoration(labelText: "Location", border: OutlineInputBorder())),
-            const SizedBox(height: 20),
-            Text(_status, style: TextStyle(fontSize: 18, color: _resultColor)),
-            const SizedBox(height: 30),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                ElevatedButton.icon(onPressed: () => _pickAndReportImage(ImageSource.camera), icon: const Icon(Icons.camera), label: const Text("Camera")),
-                ElevatedButton.icon(onPressed: () => _pickAndReportImage(ImageSource.gallery), icon: const Icon(Icons.photo), label: const Text("Gallery")),
-              ],
+          ],
+        ),
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        currentIndex: 0, // Keeps "Home" highlighted contextually
+        selectedItemColor: const Color(0xFF005F52),
+        unselectedItemColor: Colors.grey,
+        onTap: (index) => Navigator.pop(context), // Logic to return to specific tabs if needed
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: 'Home'),
+          BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: 'Map'),
+          BottomNavigationBarItem(icon: Icon(Icons.assignment_outlined), label: 'History'),
+          BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: 'Profile'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Text(title, 
+      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 12, letterSpacing: 1.1));
+  }
+
+  Widget _buildLocationPreview() {
+    return Container(
+      decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(15)),
+      child: Column(
+        children: [
+          const SizedBox(
+            height: 60, 
+            child: Center(
+              child: Icon(Icons.map_outlined, color: Colors.blueGrey, size: 30)
             )
+          ),
+          Container(
+            padding: const EdgeInsets.all(15),
+            decoration: const BoxDecoration(
+              color: Colors.white, 
+              borderRadius: BorderRadius.vertical(bottom: Radius.circular(15))
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.location_on_outlined, color: Colors.teal, size: 20),
+                const SizedBox(width: 10),
+                Expanded(child: Text(_locationController.text, style: const TextStyle(fontSize: 13))),
+                const Icon(Icons.chevron_right, color: Colors.grey),
+              ],
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCategoryCard(Map<String, dynamic> cat) {
+    bool isSelected = _selectedCategory == cat['name'];
+    return GestureDetector(
+      onTap: () => setState(() => _selectedCategory = cat['name']),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        width: (MediaQuery.of(context).size.width - 52) / 2,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: isSelected ? const Color(0xFF005F52) : Colors.transparent, width: 2),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: cat['color'], borderRadius: BorderRadius.circular(8)),
+              child: Icon(cat['icon'], color: cat['iconColor'], size: 20),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Text(cat['name'], style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
           ],
         ),
       ),
