@@ -8,7 +8,7 @@ void main() => runApp(MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFF2DF73)),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF005F52)),
       ),
       home: const HomeScreen(),
     ));
