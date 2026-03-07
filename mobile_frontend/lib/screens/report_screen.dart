@@ -169,19 +169,6 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        type: BottomNavigationBarType.fixed,
-        currentIndex: 0, // Keeps "Home" highlighted contextually
-        selectedItemColor: const Color(0xFF005F52),
-        unselectedItemColor: Colors.grey,
-        onTap: (index) => Navigator.pop(context), // Logic to return to specific tabs if needed
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: 'Home'),
-          BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: 'Map'),
-          BottomNavigationBarItem(icon: Icon(Icons.assignment_outlined), label: 'History'),
-          BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: 'Profile'),
-        ],
-      ),
     );
   }
 

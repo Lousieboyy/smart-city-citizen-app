@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'report_screen.dart';
 import 'map_screen.dart';
+import 'history_screen.dart';
 
 void main() => runApp(MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -26,7 +27,7 @@ class _HomeScreenState extends State<HomeScreen> {
   static final List<Widget> _widgetOptions = <Widget>[
     const DashboardContent(), // Your original UI
     const MapViewScreen(),
-    const Center(child: Text('My Reports', style: TextStyle(fontSize: 24))),
+    const HistoryScreen(),
     const Center(child: Text('Profile', style: TextStyle(fontSize: 24))),
   ];
 
