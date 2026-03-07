@@ -56,7 +56,7 @@ class HistoryScreen extends StatelessWidget {
         elevation: 0,
         centerTitle: false,
         title: const Text(
-          "Notifications",
+          "History",
           style: TextStyle(
             color: Color(0xFF01262E), 
             fontWeight: FontWeight.bold, 

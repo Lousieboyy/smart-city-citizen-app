@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 import 'report_screen.dart';
 import 'map_screen.dart';
 import 'history_screen.dart';
+import 'profile_screen.dart';
 
 void main() => runApp(MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF005F52)),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFF2DF73)),
       ),
       home: const HomeScreen(),
     ));
@@ -28,7 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
     const DashboardContent(), // Your original UI
     const MapViewScreen(),
     const HistoryScreen(),
-    const Center(child: Text('Profile', style: TextStyle(fontSize: 24))),
+    const ProfileScreen(),
   ];
 
   void _onItemTapped(int index) {
