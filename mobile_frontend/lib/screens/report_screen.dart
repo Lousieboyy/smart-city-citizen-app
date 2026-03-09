@@ -14,62 +14,112 @@ class CitizenReportScreen extends StatefulWidget {
 
 class _CitizenReportScreenState extends State<CitizenReportScreen> {
   File? _image;
-  final picker = ImagePicker();
-  bool _isLoading = false;
+  final ImagePicker _picker = ImagePicker();
+  
+  // States for UX
+  bool _isAnalyzing = false; 
   String? _selectedCategory;
+  String? _confidence; // Stores AI calculation percentage
+
   final TextEditingController _descriptionController = TextEditingController();
   final TextEditingController _locationController = TextEditingController(text: "Fetching location...");
 
+  // Updated to match your specific trained dataset classes
   final List<Map<String, dynamic>> _categories = [
-    {'name': 'Road Damage', 'icon': Icons.construction, 'color': Color(0xFFFFEBEE), 'iconColor': Colors.red},
-    {'name': 'Street Lighting', 'icon': Icons.lightbulb_outline, 'color': Color(0xFFFFF3E0), 'iconColor': Colors.orange},
-    {'name': 'Waste Management', 'icon': Icons.delete_outline, 'color': Color(0xFFE8F5E9), 'iconColor': Colors.green},
-    {'name': 'Drainage', 'icon': Icons.water_drop_outlined, 'color': Color(0xFFE3F2FD), 'iconColor': Colors.blue},
-    {'name': 'Noise Disturbance', 'icon': Icons.volume_up_outlined, 'color': Color(0xFFF5F5F5), 'iconColor': Colors.grey},
+    {'name': 'Drainage', 'icon': Icons.water_drop_outlined, 'color': const Color(0xFFE3F2FD), 'iconColor': Colors.blue},
+    {'name': 'Normal', 'icon': Icons.check_circle_outline, 'color': const Color(0xFFE8F5E9), 'iconColor': Colors.green},
+    {'name': 'Other', 'icon': Icons.more_horiz, 'color': const Color(0xFFF5F5F5), 'iconColor': Colors.grey},
+    {'name': 'Pothole', 'icon': Icons.construction, 'color': const Color(0xFFFFEBEE), 'iconColor': Colors.red},
+    {'name': 'Waste', 'icon': Icons.delete_outline, 'color': const Color(0xFFFFF3E0), 'iconColor': Colors.orange},
   ];
 
   @override
   void initState() {
     super.initState();
-    _fetchLocation();
+    _initLocation();
   }
 
-  Future<void> _fetchLocation() async {
-    try {
-      Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
-      setState(() {
-        _locationController.text = "Jalan Ampang, KL (${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)})";
-      });
-    } catch (e) {
-      setState(() => _locationController.text = "Location unavailable");
+  @override
+  void dispose() {
+    _descriptionController.dispose();
+    _locationController.dispose();
+    super.dispose();
+  }
+
+  /// Handles permissions and gets initial location
+  Future<void> _initLocation() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    
+    if (permission != LocationPermission.deniedForever) {
+      try {
+        Position position = await Geolocator.getCurrentPosition();
+        setState(() {
+          _locationController.text = "Lat: ${position.latitude.toStringAsFixed(4)}, Lon: ${position.longitude.toStringAsFixed(4)}";
+        });
+      } catch (e) {
+        setState(() => _locationController.text = "Location unavailable");
+      }
     }
   }
 
+  /// 1. Pick Image
   Future<void> _pickImage() async {
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    final XFile? pickedFile = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80, 
+    );
+
     if (pickedFile != null) {
       setState(() {
         _image = File(pickedFile.path);
-        _isLoading = true;
+        _isAnalyzing = true; // Start analysis state
+        _selectedCategory = null; // Clear previous prediction
+        _confidence = null; // Reset confidence for new calculation
       });
-      await _sendToAI(_image!);
+      
+      // 2. Classify immediately
+      await _classifyImage(_image!);
     }
   }
 
-  Future<void> _sendToAI(File imageFile) async {
+  /// 3. AI Classification Logic
+  Future<void> _classifyImage(File imageFile) async {
     try {
       var request = http.MultipartRequest('POST', Uri.parse('http://10.0.2.2:8000/predict'));
       request.files.add(await http.MultipartFile.fromPath('file', imageFile.path));
-      var response = await request.send();
+      
+      var response = await request.send().timeout(const Duration(seconds: 10));
+      
       if (response.statusCode == 200) {
         var responseData = await response.stream.bytesToString();
         var decoded = jsonDecode(responseData);
-        setState(() => _selectedCategory = decoded['issue_type']);
+        
+        String aiResult = decoded['issue_type']; 
+        double confidenceNum = double.parse(decoded['confidence'].replaceAll('%', ''));
+
+        setState(() {
+          _confidence = decoded['confidence'];
+          
+          // Only auto-select if AI is more than 70% sure
+          if (confidenceNum > 70.0) {
+            // Case-insensitive match to handle "pothole" vs "Pothole"
+            _selectedCategory = _categories.any((c) => c['name'].toString().toLowerCase() == aiResult.toLowerCase()) 
+                ? _categories.firstWhere((c) => c['name'].toString().toLowerCase() == aiResult.toLowerCase())['name']
+                : null;
+          } else {
+            // If AI is unsure, don't select anything automatically
+            _selectedCategory = null;
+            _confidence = "$_confidence (Low Certainty)";
+          }
+        });
       }
     } catch (e) {
-      debugPrint("AI Connection Failed: $e");
+      debugPrint("Classification Error: $e");
     } finally {
-      setState(() => _isLoading = false);
+      setState(() => _isAnalyzing = false); // Stop analysis state
     }
   }
 
@@ -80,10 +130,6 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
-          onPressed: () => Navigator.pop(context),
-        ),
         title: const Text("Report an Issue", 
           style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
       ),
@@ -92,146 +138,220 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildSectionTitle("CATEGORY"),
+            _buildSectionHeader("EVIDENCE", Icons.photo_library_outlined),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: _categories.map((cat) => _buildCategoryCard(cat)).toList(),
-            ),
+            _buildImagePicker(),
+            
+            // AI Analysis Preview Card
+            _buildAIAnalysisCard(),
+
             const SizedBox(height: 25),
-            _buildSectionTitle("DESCRIPTION"),
+            _buildSectionHeader("CATEGORY SELECTION", Icons.auto_awesome_outlined),
+            const SizedBox(height: 12),
+            _buildCategoryGrid(),
+            
+            const SizedBox(height: 25),
+            _buildSectionHeader("DESCRIPTION", Icons.edit_note),
             const SizedBox(height: 10),
-            TextField(
-              controller: _descriptionController,
-              maxLines: 4,
-              decoration: InputDecoration(
-                hintText: "Describe the issue in detail...",
-                hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding: const EdgeInsets.all(15),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(15),
-                  borderSide: BorderSide(color: Colors.grey.shade200),
-                ),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
-              ),
-            ),
+            _buildDescriptionField(),
+            
             const SizedBox(height: 25),
-            _buildSectionTitle("PHOTO EVIDENCE"),
-            const SizedBox(height: 10),
-            GestureDetector(
-              onTap: _pickImage,
-              child: Container(
-                height: 100,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(color: Colors.blue.shade50, width: 2),
-                  color: Colors.blue.withOpacity(0.02),
-                ),
-                child: _image == null 
-                  ? Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: const [
-                        Icon(Icons.camera_alt_outlined, color: Colors.grey),
-                        SizedBox(width: 8),
-                        Text("Upload Photo", style: TextStyle(color: Colors.grey)),
-                      ],
-                    )
-                  : ClipRRect(
-                      borderRadius: BorderRadius.circular(15),
-                      child: Image.file(_image!, fit: BoxFit.cover),
-                    ),
-              ),
-            ),
-            const SizedBox(height: 25),
-            _buildSectionTitle("LOCATION"),
+            _buildSectionHeader("LOCATION", Icons.map_outlined),
             const SizedBox(height: 10),
             _buildLocationPreview(),
+            
             const SizedBox(height: 30),
-            SizedBox(
-              width: double.infinity,
-              height: 55,
-              child: ElevatedButton(
-                onPressed: () => Navigator.pop(context), 
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xffa8cfcd),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                  elevation: 0,
-                ),
-                child: const Text("Submit Report", 
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-              ),
-            ),
-            const SizedBox(height: 20),
+            _buildSubmitButton(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildSectionTitle(String title) {
-    return Text(title, 
-      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 12, letterSpacing: 1.1));
+  // --- AI ANALYSIS CARD COMPONENT ---
+  Widget _buildAIAnalysisCard() {
+    if (_image == null) return const SizedBox.shrink();
+    
+    // Check if the AI detected that everything is fine
+    bool isNormal = _selectedCategory == "Normal";
+
+    return Container(
+      margin: const EdgeInsets.only(top: 15),
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _isAnalyzing ? Colors.grey.shade50 : (isNormal ? Colors.green.shade50 : const Color(0xFFE0F2F1)),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(
+          color: _isAnalyzing ? Colors.grey.shade200 : (isNormal ? Colors.green : const Color(0xFF005F52)),
+          width: 1,
+        ),
+      ),
+      child: _isAnalyzing 
+        ? Row(
+            children: const [
+              SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.grey)),
+              SizedBox(width: 12),
+              Text("Calculating AI result...", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w500)),
+            ],
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(isNormal ? Icons.check_circle : Icons.analytics_outlined, color: isNormal ? Colors.green : const Color(0xFF004D40), size: 18),
+                  const SizedBox(width: 8),
+                  Text("AI CALCULATION", style: TextStyle(fontWeight: FontWeight.bold, color: isNormal ? Colors.green.shade800 : Colors.teal.shade900, fontSize: 12)),
+                  const Spacer(),
+                  if (_confidence != null)
+                    Text("$_confidence Match", style: TextStyle(fontWeight: FontWeight.bold, color: isNormal ? Colors.green.shade800 : const Color(0xFF004D40))),
+                ],
+              ),
+              const Divider(height: 20),
+              Text(
+                _selectedCategory != null 
+                  ? "Suggested: $_selectedCategory" 
+                  : "No clear category detected",
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                isNormal 
+                  ? "No infrastructure issue detected." 
+                  : "Verify and adjust the category if necessary below.",
+                style: TextStyle(fontSize: 11, color: isNormal ? Colors.green.shade700 : Colors.black54),
+              ),
+            ],
+          ),
+    );
+  }
+
+  // --- UI COMPONENTS ---
+
+  Widget _buildSectionHeader(String title, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: Colors.blueGrey),
+        const SizedBox(width: 6),
+        Text(title, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blueGrey, fontSize: 11, letterSpacing: 1.1)),
+      ],
+    );
+  }
+
+  Widget _buildImagePicker() {
+    return GestureDetector(
+      onTap: _pickImage,
+      child: Container(
+        height: 180,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: Colors.grey.shade200),
+          color: Colors.grey.shade50,
+        ),
+        child: _image == null 
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: const [
+                Icon(Icons.add_a_photo, size: 40, color: Colors.grey),
+                SizedBox(height: 8),
+                Text("Take a photo of the issue", style: TextStyle(color: Colors.grey)),
+              ],
+            )
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(15),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.file(_image!, fit: BoxFit.cover),
+                  if (_isAnalyzing)
+                    Container(
+                      color: Colors.black45,
+                      child: const Center(child: CircularProgressIndicator(color: Colors.white)),
+                    ),
+                ],
+              ),
+            ),
+      ),
+    );
+  }
+
+  Widget _buildCategoryGrid() {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: _categories.map((cat) {
+        bool isSelected = _selectedCategory == cat['name'];
+        return GestureDetector(
+          onTap: () => setState(() => _selectedCategory = cat['name']),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            width: (MediaQuery.of(context).size.width - 52) / 2,
+            decoration: BoxDecoration(
+              color: isSelected ? cat['color'] : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected ? cat['iconColor'] : Colors.grey.shade200, 
+                width: 2
+              ),
+              boxShadow: isSelected ? [] : [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)],
+            ),
+            child: Row(
+              children: [
+                Icon(cat['icon'], color: cat['iconColor'], size: 20),
+                const SizedBox(width: 8),
+                Expanded(child: Text(cat['name'], style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal))),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildDescriptionField() {
+    return TextField(
+      controller: _descriptionController,
+      maxLines: 3,
+      decoration: InputDecoration(
+        hintText: "Add more details here...",
+        filled: true,
+        fillColor: Colors.grey.shade50,
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
   }
 
   Widget _buildLocationPreview() {
     return Container(
-      decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(15)),
-      child: Column(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200)),
+      child: Row(
         children: [
-          const SizedBox(
-            height: 60, 
-            child: Center(
-              child: Icon(Icons.map_outlined, color: Colors.blueGrey, size: 30)
-            )
-          ),
-          Container(
-            padding: const EdgeInsets.all(15),
-            decoration: const BoxDecoration(
-              color: Colors.white, 
-              borderRadius: BorderRadius.vertical(bottom: Radius.circular(15))
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.location_on_outlined, color: Colors.teal, size: 20),
-                const SizedBox(width: 10),
-                Expanded(child: Text(_locationController.text, style: const TextStyle(fontSize: 13))),
-                const Icon(Icons.chevron_right, color: Colors.grey),
-              ],
-            ),
-          )
+          const Icon(Icons.location_on, color: Colors.teal, size: 20),
+          const SizedBox(width: 10),
+          Expanded(child: Text(_locationController.text, style: const TextStyle(fontSize: 13))),
         ],
       ),
     );
   }
 
-  Widget _buildCategoryCard(Map<String, dynamic> cat) {
-    bool isSelected = _selectedCategory == cat['name'];
-    return GestureDetector(
-      onTap: () => setState(() => _selectedCategory = cat['name']),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        width: (MediaQuery.of(context).size.width - 52) / 2,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: isSelected ? const Color(0xFF005F52) : Colors.transparent, width: 2),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))],
+  Widget _buildSubmitButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 55,
+      child: ElevatedButton(
+        // Optional: you can disable submit if category is 'Normal' by checking `_selectedCategory == 'Normal'` here.
+        onPressed: (_image == null || _isAnalyzing) ? null : () => Navigator.pop(context), 
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF005F52),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          elevation: 0,
         ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: cat['color'], borderRadius: BorderRadius.circular(8)),
-              child: Icon(cat['icon'], color: cat['iconColor'], size: 20),
-            ),
-            const SizedBox(width: 8),
-            Expanded(child: Text(cat['name'], style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
-          ],
-        ),
+        child: const Text("Submit Report", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
       ),
     );
   }

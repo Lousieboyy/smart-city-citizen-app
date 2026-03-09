@@ -31,8 +31,8 @@ class ProfileScreen extends StatelessWidget {
                   child: Text("AR", style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 15),
-                const Text("Ahmad Razak", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                const Text("ahmad.razak@email.com", style: TextStyle(color: Colors.white70, fontSize: 14)),
+                const Text("Mohamad Haikal", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                const Text("mohamadhaikal@email.com", style: TextStyle(color: Colors.white70, fontSize: 14)),
                 const SizedBox(height: 25),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
