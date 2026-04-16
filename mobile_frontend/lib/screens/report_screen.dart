@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import '../services/api_service.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class CitizenReportScreen extends StatefulWidget {
   const CitizenReportScreen({super.key});
@@ -18,19 +20,22 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   
   // States for UX
   bool _isAnalyzing = false; 
+  bool _isSubmitting = false;
   List<String> _selectedCategories = [];
   String? _confidence; 
-  String? _aiRawResult; // NEW: Stores the specific word from AI (e.g., "Pothole")
+  String? _aiRawResult; 
 
   final TextEditingController _descriptionController = TextEditingController();
   final TextEditingController _locationController = TextEditingController(text: "Fetching location...");
 
+  // ADDED: "Street Lighting" to match scope item #9
   final List<Map<String, dynamic>> _categories = [
     {'name': 'Drainage', 'icon': Icons.water_drop_outlined, 'color': const Color(0xFFE3F2FD), 'iconColor': Colors.blue},
     {'name': 'Normal', 'icon': Icons.check_circle_outline, 'color': const Color(0xFFE8F5E9), 'iconColor': Colors.green},
-    {'name': 'Other', 'icon': Icons.more_horiz, 'color': const Color(0xFFF5F5F5), 'iconColor': Colors.grey},
+    {'name': 'Street Lighting', 'icon': Icons.lightbulb_outline, 'color': const Color(0xFFFFF9C4), 'iconColor': Colors.orangeAccent},
     {'name': 'Road Damage', 'icon': Icons.construction, 'color': const Color(0xFFFFEBEE), 'iconColor': Colors.red},
     {'name': 'Waste Management', 'icon': Icons.delete_outline, 'color': const Color(0xFFFFF3E0), 'iconColor': Colors.orange},
+    {'name': 'Other', 'icon': Icons.more_horiz, 'color': const Color(0xFFF5F5F5), 'iconColor': Colors.grey},
   ];
 
   @override
@@ -46,6 +51,10 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
     super.dispose();
   }
 
+  String? _address;
+  double? _latitude;
+  double? _longitude;
+
   Future<void> _initLocation() async {
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -54,11 +63,30 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
     if (permission != LocationPermission.deniedForever) {
       try {
         Position position = await Geolocator.getCurrentPosition();
+        
+        _latitude = position.latitude;
+        _longitude = position.longitude;
+
+        String locationText = "Lat: ${position.latitude.toStringAsFixed(4)}, Lon: ${position.longitude.toStringAsFixed(4)}";
+        String resolvedAddress = locationText;
+
+        try {
+          List<Placemark> placemarks = await placemarkFromCoordinates(position.latitude, position.longitude);
+          if (placemarks.isNotEmpty) {
+            Placemark place = placemarks[0];
+            resolvedAddress = "${place.street}, ${place.locality}, ${place.country}";
+          }
+        } catch (e) {
+          debugPrint("Geocoding error: $e");
+        }
+
         setState(() {
-          _locationController.text = "Lat: ${position.latitude.toStringAsFixed(4)}, Lon: ${position.longitude.toStringAsFixed(4)}";
+          _locationController.text = locationText;
+          _address = resolvedAddress;
         });
       } catch (e) {
         setState(() => _locationController.text = "Location unavailable");
+        _address = "Unknown location";
       }
     }
   }
@@ -75,7 +103,7 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
         _isAnalyzing = true; 
         _selectedCategories.clear(); 
         _confidence = null;
-        _aiRawResult = null; // Reset raw result
+        _aiRawResult = null;
       });
       await _classifyImage(_image!);
     }
@@ -83,35 +111,56 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
 
   Future<void> _classifyImage(File imageFile) async {
     try {
-      var request = http.MultipartRequest('POST', Uri.parse('http://10.0.2.2:8000/predict'));
-      request.files.add(await http.MultipartFile.fromPath('file', imageFile.path));
-      var response = await request.send().timeout(const Duration(seconds: 10));
+      var response = await ApiService.predict(imageFile.path);
       
       if (response.statusCode == 200) {
         var responseData = await response.stream.bytesToString();
         var decoded = jsonDecode(responseData);
         
-        String rawAIResult = decoded['issue_type'].toString().toLowerCase().trim();
+        String rawAIResult = decoded['issue_type'].toString().toLowerCase().trim().replaceAll('_', ' ');
         double confidenceNum = double.parse(decoded['confidence'].replaceAll('%', ''));
 
         setState(() {
           _confidence = decoded['confidence'];
-          _aiRawResult = decoded['issue_type']; // Store the exact word (e.g., "Pothole")
+          _aiRawResult = decoded['issue_type']; 
           _selectedCategories.clear(); 
 
           if (confidenceNum > 70.0) {
-            // Mapping Logic
-            if (rawAIResult.contains("pothole") || rawAIResult.contains("pavement")) {
+            // UPDATED: MAPPING LOGIC FOR ALL 12 SCOPE ITEMS
+            
+            // 1. Road Damage Group (Items 0, 2, 7, 8, 10, 6)
+            if (rawAIResult.contains("pothole") || 
+                rawAIResult.contains("sidewalk") || 
+                rawAIResult.contains("fallen tree") || 
+                rawAIResult.contains("road sign") || 
+                rawAIResult.contains("vandalism") ||
+                rawAIResult.contains("vegetation")) {
               _selectedCategories.add("Road Damage");
             }
-            if (rawAIResult.contains("water") || rawAIResult.contains("drain")) {
+            
+            // 2. Drainage Group (Item 1)
+            if (rawAIResult.contains("drainage") || rawAIResult.contains("water")) {
               _selectedCategories.add("Drainage");
             }
-            if (rawAIResult.contains("waste") || rawAIResult.contains("trash")) {
+            
+            // 3. Waste Management Group (Items 3, 5)
+            if (rawAIResult.contains("dumping") || rawAIResult.contains("burning") || rawAIResult.contains("waste")) {
               _selectedCategories.add("Waste Management");
             }
+
+            // 4. Street Lighting (Item 9)
+            if (rawAIResult.contains("street light")) {
+              _selectedCategories.add("Street Lighting");
+            }
+            
+            // 5. Normal (Item 4)
             if (rawAIResult.contains("normal")) {
               _selectedCategories.add("Normal");
+            }
+
+            // 6. Other (Item 11)
+            if (rawAIResult.contains("other") || _selectedCategories.isEmpty) {
+              if (!_selectedCategories.contains("Other")) _selectedCategories.add("Other");
             }
           }
         });
@@ -200,13 +249,11 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                 ],
               ),
               const Divider(height: 20),
-              // DISPLAY RAW AI RESULT HERE
               Text(
                 "AI Detection: ${_aiRawResult ?? 'Analyzing...'}", 
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87),
               ),
               const SizedBox(height: 4),
-              // DISPLAY MAPPED CATEGORIES
               Text(
                 "Category Suggestion: ${_selectedCategories.isEmpty ? 'Manual Selection' : _selectedCategories.join(', ')}",
                 style: TextStyle(fontSize: 13, color: isNormal ? Colors.green.shade800 : Colors.teal.shade700),
@@ -215,8 +262,6 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           ),
     );
   }
-
-  // --- UI HELPERS ---
 
   Widget _buildSectionHeader(String title, IconData icon) {
     return Row(
@@ -287,7 +332,69 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildLocationPreview() {
-    return Container(padding: const EdgeInsets.all(15), decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(12)), child: Row(children: [const Icon(Icons.location_on, color: Colors.teal), const SizedBox(width: 10), Expanded(child: Text(_locationController.text))]));
+    return Container(
+      padding: const EdgeInsets.all(15), 
+      decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(12)), 
+      child: Row(
+        children: [
+          const Icon(Icons.location_on, color: Colors.teal), 
+          const SizedBox(width: 10), 
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_address ?? "Fetching address...", style: const TextStyle(fontWeight: FontWeight.bold)),
+                if (_locationController.text.isNotEmpty && _locationController.text != "Fetching location...")
+                  Text(_locationController.text, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              ],
+            )
+          )
+        ]
+      )
+    );
+  }
+
+  Future<void> _submitReport() async {
+    if (_image == null || _isAnalyzing) return;
+    
+    setState(() => _isSubmitting = true);
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getInt('user_id') ?? 1;
+
+      Map<String, String> fields = {
+        'user_id': userId.toString(),
+        'description': _descriptionController.text,
+        'location': _locationController.text,
+        'address': _address ?? 'Unknown location',
+        'categories': _selectedCategories.join(', '),
+        'ai_prediction': _aiRawResult ?? 'None',
+        'confidence': _confidence ?? '0%',
+      };
+      if (_latitude != null) fields['latitude'] = _latitude.toString();
+      if (_longitude != null) fields['longitude'] = _longitude.toString();
+      
+      var response = await ApiService.submitReport(fields, _image!.path);
+      if (response.statusCode == 200) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report submitted successfully!'), backgroundColor: Colors.green));
+          Navigator.pop(context, true);
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to submit report.'), backgroundColor: Colors.red));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
   }
 
   Widget _buildSubmitButton() {
@@ -295,9 +402,11 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       width: double.infinity,
       height: 55,
       child: ElevatedButton(
-        onPressed: (_image == null || _isAnalyzing) ? null : () => Navigator.pop(context), 
+        onPressed: (_image == null || _isAnalyzing || _isSubmitting) ? null : _submitReport, 
         style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF005F52), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-        child: const Text("Submit Report", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        child: _isSubmitting
+          ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+          : const Text("Submit Report", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
       ),
     );
   }

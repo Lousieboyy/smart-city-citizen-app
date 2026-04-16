@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/api_service.dart';
 import 'home_screen.dart';
+import 'signup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -9,9 +13,9 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  // 1. Controllers to capture text input
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
+  // 1. Controllers to capture text input (pre-filled with default test user)
+  final TextEditingController _usernameController = TextEditingController(text: "test");
+  final TextEditingController _passwordController = TextEditingController(text: "test1234");
   
   // 2. A GlobalKey to manage the Form state (for validation)
   final _formKey = GlobalKey<FormState>();
@@ -19,18 +23,55 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void dispose() {
     // 3. Always clean up controllers when the widget is destroyed
-    _emailController.dispose();
+    _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-  void _handleLogin() {
+  bool _isLoading = false;
+
+  Future<void> _handleLogin() async {
     // 4. Check if the inputs are valid before navigating
-    if (_formKey.currentState!.validate()) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const HomeScreen()),
+    if (!_formKey.currentState!.validate()) return;
+      
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final response = await ApiService.login(
+        _usernameController.text,
+        _passwordController.text,
       );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt('user_id', data['user_id']);
+        await prefs.setString('username', data['username']);
+
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Login failed: ${jsonDecode(response.body)['detail']}')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error connecting to backend: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -61,20 +102,19 @@ class _LoginScreenState extends State<LoginScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),            
-              // Email Field
+              // Username Field
               TextFormField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
+                controller: _usernameController,
+                keyboardType: TextInputType.text,
                 style: const TextStyle(color: Colors.white),
                 decoration: const InputDecoration(
-                  labelText: "Email",
-                  hintText: "citizen@gmail.com",
-                  prefixIcon: Icon(Icons.email),
+                  labelText: "Username",
+                  hintText: "Enter username",
+                  prefixIcon: Icon(Icons.person),
                   border: OutlineInputBorder(),
                 ),
                 validator: (value) {
-                  if (value == null || value.isEmpty) return "Please enter your email";
-                  // if (!value.contains('@gmail.com')) return "Enter a valid email address";
+                  if (value == null || value.isEmpty) return "Please enter your username";
                   return null;
                 },
               ),
@@ -84,6 +124,7 @@ class _LoginScreenState extends State<LoginScreen> {
               TextFormField(
                 controller: _passwordController,
                 obscureText: true,
+                style: const TextStyle(color: Colors.white),
                 decoration: const InputDecoration(
                   labelText: "Password",
                   hintText: "******",
@@ -91,7 +132,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   border: OutlineInputBorder(),
                 ),
                 validator: (value) {
-                  // if (value == null || value.length < 6) return "Password must be at least 6 characters";
+                  if (value == null || value.length < 4) return "Password must be at least 4 characters";
                   return null;
                 },
               ),
@@ -99,20 +140,27 @@ class _LoginScreenState extends State<LoginScreen> {
 
               // Login Button
               SizedBox(
-                width: 100,
+                width: 150,
                 height: 45,
                 child: ElevatedButton(
-                  onPressed: _handleLogin,
+                  onPressed: _isLoading ? null : _handleLogin,
                   style: ElevatedButton.styleFrom(
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
-                  child: const Text("LOGIN"),
+                  child: _isLoading 
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Text("LOGIN"),
                 ),
               ),
               
               const SizedBox(height: 20),
               TextButton(
-                onPressed: () { /* Navigate to Sign Up */ },
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const SignupScreen()),
+                  );
+                },
                 child: const Text("Don't have an account? Sign up"),
                 style: TextButton.styleFrom(
                   textStyle: TextStyle(color: Colors.white70),

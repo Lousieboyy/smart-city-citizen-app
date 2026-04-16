@@ -1,5 +1,12 @@
-0 drainage
-1 normal
-2 other
-3 pothole
-4 waste
+0 Broken_Sidewalk
+1 Drainage
+2 Fallen_Tree
+3 Illegal_Dumping
+4 Normal
+5 Open_Burning
+6 Overgrown_Vegetation
+7 Pothole
+8 Road_Sign
+9 Street_Light
+10 Vandalism
+11 other

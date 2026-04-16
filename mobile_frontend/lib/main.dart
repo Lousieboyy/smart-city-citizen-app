@@ -1,13 +1,45 @@
 import 'package:flutter/material.dart';
-import 'screens/login_screen.dart'; // Import your login screen
+import 'package:shared_preferences/shared_preferences.dart';
+import 'screens/login_screen.dart';
+import 'screens/home_screen.dart';
 
 void main() => runApp(const MyApp());
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
   @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  bool _isLoggedIn = false;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkLoginStatus();
+  }
+
+  Future<void> _checkLoginStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getInt('user_id');
+    
+    setState(() {
+      _isLoggedIn = userId != null;
+      _isLoading = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const MaterialApp(
+        home: Scaffold(body: Center(child: CircularProgressIndicator())),
+      );
+    }
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Smart City App',
@@ -16,8 +48,8 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFFb5dfd6)
         ),
-        inputDecorationTheme: InputDecorationTheme(
-          labelStyle: const TextStyle(color: Colors.white),
+        inputDecorationTheme: const InputDecorationTheme(
+          labelStyle: TextStyle(color: Colors.white),
           hintStyle: TextStyle(color: Colors.grey),
           prefixIconColor: Colors.white,
           enabledBorder: OutlineInputBorder(
@@ -27,15 +59,14 @@ class MyApp extends StatelessWidget {
             borderSide: BorderSide(color: Colors.blue)
           ),
         ),
-        appBarTheme: AppBarTheme(
+        appBarTheme: const AppBarTheme(
           iconTheme: IconThemeData(
             color: Colors.white,
           ),
-          titleTextStyle: const TextStyle(color: Colors.white)
+          titleTextStyle: TextStyle(color: Colors.white)
         )
       ),
-      // APP STARTS HERE: Login is the first thing they see
-      home: const LoginScreen(), 
+      home: _isLoggedIn ? const HomeScreen() : const LoginScreen(), 
     );
   }
 }

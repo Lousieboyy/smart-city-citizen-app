@@ -1,10 +1,73 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../services/api_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'login_screen.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  String _username = 'Citizen';
+  int _totalReports = 0;
+  int _resolvedReports = 0;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfileData();
+  }
+
+  Future<void> _loadProfileData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getInt('user_id') ?? 1;
+      final userName = prefs.getString('username') ?? 'Citizen';
+
+      setState(() {
+        _username = userName;
+      });
+
+      final statsResponse = await ApiService.getStats(userId);
+
+      if (statsResponse.statusCode == 200) {
+        final statsData = jsonDecode(statsResponse.body);
+        setState(() {
+          _totalReports = statsData['total'] ?? 0;
+          _resolvedReports = statsData['resolved'] ?? 0;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error fetching profile stats: $e");
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+        (route) => false,
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator(color: Color(0xFF005F52)));
+    }
+
     return SingleChildScrollView(
       child: Column(
         children: [
@@ -25,20 +88,20 @@ class ProfileScreen extends StatelessWidget {
             ),
             child: Column(
               children: [
-                const CircleAvatar(
+                 CircleAvatar(
                   radius: 45,
                   backgroundColor: Colors.white24,
-                  child: Text("AR", style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
+                  child: Text(_username.isNotEmpty ? _username.substring(0, 1).toUpperCase() : "U", style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 15),
-                const Text("Mohamad Haikal", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                const Text("mohamadhaikal@email.com", style: TextStyle(color: Colors.white70, fontSize: 14)),
+                Text(_username, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                const Text("citizen@smartcity.gov", style: TextStyle(color: Colors.white70, fontSize: 14)),
                 const SizedBox(height: 25),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    _buildQuickStat("24", "Reports"),
-                    _buildQuickStat("14", "Resolved"),
+                    _buildQuickStat("$_totalReports", "Reports"),
+                    _buildQuickStat("$_resolvedReports", "Resolved"),
                   ],
                 ),
               ],
@@ -55,8 +118,8 @@ class ProfileScreen extends StatelessWidget {
           // ACTIVITY Section
           _buildSectionHeader("ACTIVITY"),
           _buildMenuCard([
-            _buildMenuItem(Icons.description_outlined, "My Reports", trailingText: "24"),
-            _buildMenuItem(Icons.workspace_premium_outlined, "Citizen Score", trailingText: "Gold"),
+            _buildMenuItem(Icons.description_outlined, "My Reports", trailingText: "$_totalReports"),
+            _buildMenuItem(Icons.workspace_premium_outlined, "Citizen Score", trailingText: _resolvedReports > 5 ? "Gold" : "Silver"),
           ]),
 
           // ABOUT Section
@@ -70,9 +133,7 @@ class ProfileScreen extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
             child: OutlinedButton(
-              onPressed: () {
-                // Handle logout logic
-              },
+              onPressed: _logout,
               style: OutlinedButton.styleFrom(
                 minimumSize: const Size(double.infinity, 55),
                 side: const BorderSide(color: Colors.redAccent, width: 0.8),

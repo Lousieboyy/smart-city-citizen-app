@@ -4,14 +4,9 @@ import 'map_screen.dart';
 import 'history_screen.dart';
 import 'profile_screen.dart';
 
-void main() => runApp(MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF005F52)),
-      ),
-      home: const HomeScreen(),
-    ));
+import 'dart:convert';
+import '../services/api_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // 1. Changed to StatefulWidget to handle tab switching
 class HomeScreen extends StatefulWidget {
@@ -75,44 +70,169 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 // 3. Your original UI moved here to keep things clean
-class DashboardContent extends StatelessWidget {
+class DashboardContent extends StatefulWidget {
   const DashboardContent({super.key});
 
   @override
+  State<DashboardContent> createState() => _DashboardContentState();
+}
+
+class _DashboardContentState extends State<DashboardContent> {
+  bool _isLoading = true;
+  String _username = "Citizen";
+  
+  // Dashboard stats
+  int _totalReports = 0;
+  int _pendingReports = 0;
+  int _resolvedReports = 0;
+  
+  // Category stats for progress bars
+  Map<String, int> _categories = {};
+  
+  // Recent reports
+  List<dynamic> _recentReports = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchDashboardData();
+  }
+
+  Future<void> _fetchDashboardData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getInt('user_id') ?? 1;
+      final userName = prefs.getString('username') ?? "Citizen";
+
+      setState(() {
+        _username = userName;
+      });
+
+      // Fetch stats
+      final statsResponse = await ApiService.getStats(userId);
+      
+      // Fetch recent reports (limit to 3 for dashboard)
+      final reportsResponse = await ApiService.getReports(userId: userId);
+
+      if (statsResponse.statusCode == 200 && reportsResponse.statusCode == 200) {
+        final statsData = jsonDecode(statsResponse.body);
+        final reportsData = jsonDecode(reportsResponse.body) as List;
+        
+        setState(() {
+          _totalReports = statsData['total'] ?? 0;
+          _pendingReports = statsData['pending'] ?? 0;
+          _resolvedReports = statsData['resolved'] ?? 0;
+          _categories = Map<String, int>.from(statsData['categories'] ?? {});
+          
+          // Take top 3 most recent
+          _recentReports = reportsData.take(3).toList();
+          _isLoading = false;
+        });
+      } else {
+        throw Exception("Failed to load data");
+      }
+    } catch (e) {
+      debugPrint("Error fetching dashboard data: $e");
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  String _formatTime(String timestampStr) {
+    if (timestampStr.isEmpty) return 'Unknown';
+    try {
+      DateTime dt = DateTime.parse(timestampStr).toLocal();
+      Duration diff = DateTime.now().difference(dt);
+      if (diff.inMinutes < 60) {
+        return '${diff.inMinutes == 0 ? 1 : diff.inMinutes}m ago';
+      } else if (diff.inHours < 24) {
+        return '${diff.inHours}h ago';
+      } else {
+        return '${diff.inDays}d ago';
+      }
+    } catch (e) {
+      return 'Unknown';
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              _buildHeader(context),
-              Positioned(
-                bottom: -10,
-                left: 30,
-                right: 30,
-                child: _buildMainActionButton(context),
-              ),
-            ],
-          ),
-          const SizedBox(height: 40),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator(color: Color(0xFF005F52)));
+    }
+
+    return RefreshIndicator(
+      onRefresh: _fetchDashboardData,
+      color: const Color(0xFF005F52),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Column(
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
               children: [
-                const Text("Recent Reports",
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                TextButton(onPressed: () {}, child: const Text("View all", style: TextStyle(color: Colors.teal))),
+                _buildHeader(context),
+                Positioned(
+                  bottom: -10,
+                  left: 30,
+                  right: 30,
+                  child: _buildMainActionButton(context),
+                ),
               ],
             ),
-          ),
-          _buildReportCard("Pothole on Jalan Ampang", "Road Damage • 2h ago", "In Progress", "High", Colors.orange, Colors.red),
-          _buildReportCard("Broken streetlight at Taman Melati", "Street Lighting • 5h ago", "Submitted", "Medium", Colors.blue, Colors.orange),
-          _buildReportCard("Illegal dumping near Sungai Besi", "Waste Management • 1d ago", "Resolved", "Low", Colors.green, Colors.orange),
-          _buildOverviewSection(),
-          const SizedBox(height: 20),
-        ],
+            const SizedBox(height: 40),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("Recent Reports",
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  TextButton(onPressed: () {
+                    // Could navigate to history tab via callback realistically
+                  }, child: const Text("View all", style: TextStyle(color: Colors.teal))),
+                ],
+              ),
+            ),
+            
+            if (_recentReports.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(20.0),
+                child: Text("No reports submitted yet. Create one!"),
+              )
+            else
+              ..._recentReports.map((report) {
+                String cat = report['categories'] ?? 'Unknown';
+                String timeAgo = _formatTime(report['timestamp'] ?? '');
+                String subtitle = '$cat • $timeAgo';
+                String status = report['status'] ?? 'Pending';
+                
+                Color statusCol = status == 'Pending' ? Colors.orange : (status == 'Resolved' ? Colors.green : Colors.blue);
+                
+                // Determine priority from category/status simplified
+                String priority = status == 'Resolved' ? 'Low' : 'Medium';
+                if (cat.contains('Damage') || cat.contains('Drainage') || cat.contains('Tree')) {
+                  priority = status == 'Resolved' ? 'Low' : 'High';
+                }
+                Color priorityCol = priority == 'High' ? Colors.red : (priority == 'Medium' ? Colors.orange : Colors.green);
+                
+                return _buildReportCard(
+                  report['description']?.toString().isNotEmpty == true ? report['description'] : 'Issue Reported',
+                  subtitle,
+                  status,
+                  priority,
+                  statusCol,
+                  priorityCol
+                );
+              }).toList(),
+
+            _buildOverviewSection(),
+            const SizedBox(height: 20),
+          ],
+        ),
       ),
     );
   }
@@ -139,23 +259,23 @@ class DashboardContent extends StatelessWidget {
             children: [
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text("Welcome back,", style: TextStyle(color: Colors.white70, fontSize: 14)),
-                  Text("Mohamad Haikal", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                children: [
+                  const Text("Welcome back,", style: TextStyle(color: Colors.white70, fontSize: 14)),
+                  Text(_username, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
                 ],
               ),
-              const CircleAvatar(
+               CircleAvatar(
                 backgroundColor: Colors.white24,
-                child: Text("AR", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                child: Text(_username.isNotEmpty ? _username.substring(0, 1).toUpperCase() : "U", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               )
             ],
           ),
           const SizedBox(height: 30),
           Row(
             children: [
-              _buildStatItem(Icons.description, "24", "Total Reports"),
-              _buildStatItem(Icons.access_time, "8", "Pending"),
-              _buildStatItem(Icons.check_circle_outline, "14", "Resolved"),
+              _buildStatItem(Icons.description, _totalReports.toString(), "Total Reports"),
+              _buildStatItem(Icons.access_time, _pendingReports.toString(), "Pending"),
+              _buildStatItem(Icons.check_circle_outline, _resolvedReports.toString(), "Resolved"),
             ],
           ),
         ],
@@ -212,7 +332,7 @@ class DashboardContent extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+              Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16), maxLines: 1, overflow: TextOverflow.ellipsis)),
               Icon(Icons.warning_amber_rounded, color: priorityCol, size: 20),
             ],
           ),
@@ -239,6 +359,26 @@ class DashboardContent extends StatelessWidget {
   }
 
   Widget _buildOverviewSection() {
+    // Generate dynamic category stats
+    List<Widget> progressLines = [];
+    if (_totalReports > 0 && _categories.isNotEmpty) {
+      // Sort categories by count (descending)
+      var sortedEntries = _categories.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+      
+      // Top 3 categories
+      var topCategories = sortedEntries.take(3).toList();
+      
+      List<Color> catColors = [Colors.red, Colors.orange, Colors.teal];
+      
+      for (int i = 0; i < topCategories.length; i++) {
+        var entry = topCategories[i];
+        double pct = entry.value / _totalReports;
+        progressLines.add(_buildProgressLine(entry.key, pct, catColors[i % catColors.length]));
+      }
+    } else {
+      progressLines.add(const Text("No data available.", style: TextStyle(color: Colors.grey)));
+    }
+
     return Container(
       margin: const EdgeInsets.all(20),
       padding: const EdgeInsets.all(20),
@@ -248,9 +388,7 @@ class DashboardContent extends StatelessWidget {
         children: [
           const Text("City Issue Overview", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 20),
-          _buildProgressLine("Road Damage", 0.35, Colors.red),
-          _buildProgressLine("Street Lighting", 0.25, Colors.orange),
-          _buildProgressLine("Waste Management", 0.20, Colors.teal),
+          ...progressLines,
         ],
       ),
     );
