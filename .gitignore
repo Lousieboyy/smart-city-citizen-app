@@ -1,6 +1,7 @@
 # Python
 ai_backend/.venv/
 ai_backend/__pycache__/
+ai_backend/.env
 *.pyc
 
 # Flutter
@@ -15,3 +16,7 @@ mobile_frontend/.flutter-plugins-dependencies
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Project Uploads & Temp Scripts
+ai_backend/uploads/
+mobile_frontend/*.py
