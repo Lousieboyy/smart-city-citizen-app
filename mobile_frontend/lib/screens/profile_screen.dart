@@ -136,25 +136,56 @@ class _ProfileScreenState extends State<ProfileScreen> {
               padding: const EdgeInsets.fromLTRB(24, 64, 24, 20),
               child: Column(
                 children: [
-                  Container(
-                    width: 90,
-                    height: 90,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.06),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.5),
-                    ),
-                    child: Center(
-                      child: Text(
-                        _username.isNotEmpty
-                            ? _username.substring(0, 1).toUpperCase()
-                            : "U",
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold),
+                  Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // Avatar background glow
+                      Container(
+                        width: 70,
+                        height: 70,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF818CF8).withOpacity(0.35),
+                              blurRadius: 20,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
+                      Container(
+                        width: 90,
+                        height: 90,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF818CF8), Color(0xFFC084FC)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF818CF8).withOpacity(0.3),
+                              blurRadius: 10,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                          border: Border.all(color: Colors.white.withOpacity(0.35), width: 2.0),
+                        ),
+                        child: Center(
+                          child: Text(
+                            _username.isNotEmpty
+                                ? _username.substring(0, 1).toUpperCase()
+                                : "U",
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 36,
+                                fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 16),
                   Text(_username,
@@ -164,30 +195,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.08),
+                      color: const Color(0xFF818CF8).withOpacity(0.18),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white.withOpacity(0.12), width: 1.0),
+                      border: Border.all(color: const Color(0xFFA5B4FC).withOpacity(0.35), width: 1.0),
                     ),
                     child: Text(
                       _role.toUpperCase(),
                       style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
+                          color: Color(0xFFE0E7FF),
+                          fontSize: 10,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 1.2),
                     ),
                   ),
                   const SizedBox(height: 28),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _buildQuickStat('$_totalReports', _role.toLowerCase().contains('worker') ? 'Active Tasks' : 'Total Reports'),
-                      Container(width: 1, height: 28, color: Colors.white12),
-                      _buildQuickStat('$_resolvedReports', _role.toLowerCase().contains('worker') ? 'Completed' : 'Resolved'),
-                    ],
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: [
+                        _buildQuickStat(
+                          context,
+                          '$_totalReports',
+                          _role.toLowerCase().contains('worker') ? 'Active Tasks' : 'Total Reports',
+                          const Color(0xFF818CF8),
+                        ),
+                        const SizedBox(width: 14),
+                        _buildQuickStat(
+                          context,
+                          '$_resolvedReports',
+                          _role.toLowerCase().contains('worker') ? 'Completed' : 'Resolved',
+                          const Color(0xFF34D399),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -284,18 +326,73 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  Widget _buildQuickStat(String value, String label) {
-    return Column(
-      children: [
-        Text(value,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.bold)),
-        const SizedBox(height: 2),
-        Text(label,
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12, fontWeight: FontWeight.w500)),
-      ],
+  Widget _buildQuickStat(BuildContext context, String value, String label, Color accentColor) {
+    return Expanded(
+      child: Container(
+        margin: EdgeInsets.zero,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // Centered underlay glow
+            Center(
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: accentColor.withOpacity(0.15),
+                      blurRadius: 14,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            SizedBox(
+              width: double.infinity,
+              child: GlassCard(
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+                margin: EdgeInsets.zero,
+                borderRadius: BorderRadius.circular(16),
+                borderColor: accentColor.withOpacity(0.2),
+                child: Column(
+                  children: [
+                    Text(
+                      value,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        shadows: [
+                          Shadow(
+                            color: accentColor.withOpacity(0.35),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      label.toUpperCase(),
+                      style: const TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.8,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -328,8 +425,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       leading: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(10)),
+          color: const Color(0xFF818CF8).withOpacity(0.1),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF818CF8).withOpacity(0.2), width: 1),
+        ),
         child: Icon(icon, color: const Color(0xFF818CF8), size: 18),
       ),
       title: Text(title,
