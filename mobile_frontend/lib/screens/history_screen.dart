@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../services/api_service.dart';
@@ -126,6 +127,125 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  IconData _getCategoryIcon(String category) {
+    final cat = category.toLowerCase();
+    if (cat.contains('road') || cat.contains('damage')) {
+      return Icons.construction_rounded;
+    } else if (cat.contains('light') || cat.contains('lamp')) {
+      return Icons.lightbulb_rounded;
+    } else if (cat.contains('waste') || cat.contains('trash') || cat.contains('rubbish')) {
+      return Icons.delete_outline_rounded;
+    } else if (cat.contains('drain') || cat.contains('water')) {
+      return Icons.water_drop_rounded;
+    } else if (cat.contains('noise')) {
+      return Icons.volume_up_rounded;
+    } else {
+      return Icons.report_problem_rounded;
+    }
+  }
+
+  Widget _build3DPin(String category, _StatusConfig cfg) {
+    return SizedBox(
+      width: 36,
+      height: 48,
+      child: Stack(
+        alignment: Alignment.topCenter,
+        children: [
+          // Pin Shadow (stays at bottom)
+          Positioned(
+            bottom: 4,
+            child: Container(
+              width: 14,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: const BorderRadius.all(Radius.elliptical(7, 2)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.55),
+                    blurRadius: 3,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Teardrop Pin (offset slightly upward to float)
+          Positioned(
+            top: 2,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // Rotated Teardrop base
+                Transform.rotate(
+                  angle: math.pi / 4,
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.85),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(12),
+                        topRight: Radius.circular(12),
+                        bottomLeft: Radius.circular(12),
+                        bottomRight: Radius.zero,
+                      ),
+                      border: Border.all(
+                        color: const Color(0xFFA5B4FC), // Glowing indigo border
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFA5B4FC).withOpacity(0.35),
+                          blurRadius: 5,
+                          spreadRadius: 0.5,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Category Icon
+                Positioned.fill(
+                  child: Center(
+                    child: Transform.rotate(
+                      angle: -math.pi / 4,
+                      child: Icon(
+                        _getCategoryIcon(category),
+                        color: Colors.white,
+                        size: 13,
+                      ),
+                    ),
+                  ),
+                ),
+                // Status Alert Dot
+                Positioned(
+                  top: -3,
+                  right: -3,
+                  child: Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: cfg.color,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.black, width: 1.0),
+                      boxShadow: [
+                        BoxShadow(
+                          color: cfg.color.withOpacity(0.5),
+                          blurRadius: 3,
+                          spreadRadius: 0.5,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   _StatusConfig _getStatusConfig(String status) {
     switch (status) {
       case ReportStatus.resolved:
@@ -198,8 +318,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
               runSpacing: 8,
               children: _statusOptions.map((status) {
                 final isSelected = _filterStatus == status;
-                final cfg = status == 'All' ? null : _getStatusConfig(status);
-                final Color activeColor = cfg?.color ?? const Color(0xFF818CF8);
+                final Color chipBg = isSelected 
+                    ? const Color(0xFF818CF8).withOpacity(0.22)
+                    : Colors.white.withOpacity(0.04);
+                final Color chipBorder = isSelected
+                    ? const Color(0xFFA5B4FC).withOpacity(0.7)
+                    : Colors.white.withOpacity(0.08);
+
                 return GestureDetector(
                   onTap: () => setState(() => _filterStatus = status),
                   child: AnimatedContainer(
@@ -207,10 +332,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 14, vertical: 8),
                     decoration: BoxDecoration(
-                      color: isSelected ? activeColor.withOpacity(0.2) : Colors.white.withOpacity(0.05),
+                      color: chipBg,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: isSelected ? activeColor : Colors.white.withOpacity(0.12),
+                        color: chipBorder,
                         width: 1.2,
                       ),
                     ),
@@ -305,27 +430,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
       },
       child: GlassCard(
         margin: const EdgeInsets.only(bottom: 14),
-        padding: EdgeInsets.zero,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border(
-              left: BorderSide(color: cfg.color, width: 4.5),
-            ),
-          ),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header row
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(color: cfg.color.withOpacity(0.1), shape: BoxShape.circle),
-                    child: Icon(cfg.icon, color: cfg.color, size: 18),
-                  ),
-                  const SizedBox(width: 12),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header row
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _build3DPin(item['categories'] ?? '', cfg),
+                const SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -547,8 +661,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ],
           ),
         ),
-      ),
-    );
+      );
   }
 
   Widget _buildInfoChip({
