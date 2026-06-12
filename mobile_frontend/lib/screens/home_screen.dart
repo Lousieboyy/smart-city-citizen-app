@@ -3,9 +3,12 @@ import 'report_screen.dart';
 import 'map_screen.dart';
 import 'history_screen.dart';
 import 'profile_screen.dart';
+import 'report_detail_screen.dart';
+import '../app_config.dart';
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
 import '../user_session.dart';
@@ -220,6 +223,160 @@ class _DashboardContentState extends State<DashboardContent> {
     }
   }
 
+  IconData _getCategoryIcon(String category) {
+    final cat = category.toLowerCase();
+    if (cat.contains('road') || cat.contains('damage')) {
+      return Icons.construction_rounded;
+    } else if (cat.contains('light') || cat.contains('lamp')) {
+      return Icons.lightbulb_rounded;
+    } else if (cat.contains('waste') || cat.contains('trash') || cat.contains('rubbish')) {
+      return Icons.delete_outline_rounded;
+    } else if (cat.contains('drain') || cat.contains('water')) {
+      return Icons.water_drop_rounded;
+    } else if (cat.contains('noise')) {
+      return Icons.volume_up_rounded;
+    } else {
+      return Icons.report_problem_rounded;
+    }
+  }
+
+  Widget _build3DPin(String category, _StatusConfig cfg) {
+    return SizedBox(
+      width: 36,
+      height: 48,
+      child: Stack(
+        alignment: Alignment.topCenter,
+        children: [
+          // Pin Shadow (stays at bottom)
+          Positioned(
+            bottom: 4,
+            child: Container(
+              width: 14,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: const BorderRadius.all(Radius.elliptical(7, 2)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.55),
+                    blurRadius: 3,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Teardrop Pin (offset slightly upward to float)
+          Positioned(
+            top: 2,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // Rotated Teardrop base
+                Transform.rotate(
+                  angle: math.pi / 4,
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.85),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(12),
+                        topRight: Radius.circular(12),
+                        bottomLeft: Radius.circular(12),
+                        bottomRight: Radius.zero,
+                      ),
+                      border: Border.all(
+                        color: const Color(0xFFA5B4FC), // Glowing indigo border
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFA5B4FC).withOpacity(0.35),
+                          blurRadius: 5,
+                          spreadRadius: 0.5,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Category Icon
+                Positioned.fill(
+                  child: Center(
+                    child: Transform.rotate(
+                      angle: -math.pi / 4,
+                      child: Icon(
+                        _getCategoryIcon(category),
+                        color: Colors.white,
+                        size: 13,
+                      ),
+                    ),
+                  ),
+                ),
+                // Status Alert Dot
+                Positioned(
+                  top: -3,
+                  right: -3,
+                  child: Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: cfg.color,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.black, width: 1.0),
+                      boxShadow: [
+                        BoxShadow(
+                          color: cfg.color.withOpacity(0.5),
+                          blurRadius: 3,
+                          spreadRadius: 0.5,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  _StatusConfig _getStatusConfig(String status) {
+    switch (status) {
+      case ReportStatus.resolved:
+        return const _StatusConfig(
+            color: Color(0xFF059669),
+            bg: Color(0xFFECFDF5),
+            icon: Icons.check_circle_rounded,
+            label: 'Resolved');
+      case ReportStatus.inMaintenance:
+        return const _StatusConfig(
+            color: Color(0xFF7C3AED),
+            bg: Color(0xFFF5F3FF),
+            icon: Icons.construction_rounded,
+            label: 'In Maintenance');
+      case ReportStatus.inProcess:
+        return const _StatusConfig(
+            color: Color(0xFFD97706),
+            bg: Color(0xFFFFFBEB),
+            icon: Icons.autorenew_rounded,
+            label: 'In Process');
+      case ReportStatus.inReview:
+        return const _StatusConfig(
+            color: Color(0xFF2563EB),
+            bg: Color(0xFFEFF6FF),
+            icon: Icons.rate_review_rounded,
+            label: 'In Review');
+      default:
+        return const _StatusConfig(
+            color: Color(0xFFDC2626),
+            bg: Color(0xFFFEF2F2),
+            icon: Icons.hourglass_empty_rounded,
+            label: 'Pending');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -310,46 +467,7 @@ class _DashboardContentState extends State<DashboardContent> {
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       itemCount: _recentReports.length,
                       itemBuilder: (context, index) {
-                        final report = _recentReports[index];
-                        final cat     = report['categories'] ?? 'Unknown';
-                        final timeAgo = _formatTime(report['timestamp']);
-                        final status  = report['status'] ?? 'Pending';
-
-                        // Premium Accent Mapping
-                        Color statusColor;
-                        if (status == 'Pending') {
-                          statusColor = const Color(0xFFD97706); // Amber
-                        } else if (status == 'Resolved') {
-                          statusColor = const Color(0xFF059669); // Emerald
-                        } else {
-                          statusColor = const Color(0xFF3B82F6); // Royal Blue
-                        }
-
-                        final priority = (cat.contains('Damage') ||
-                                cat.contains('Drainage') ||
-                                cat.contains('Tree'))
-                            ? (status == 'Resolved' ? 'Low' : 'High')
-                            : (status == 'Resolved' ? 'Low' : 'Medium');
-
-                        Color priorityColor;
-                        if (priority == 'High') {
-                          priorityColor = const Color(0xFFEF4444); // Crimson
-                        } else if (priority == 'Medium') {
-                          priorityColor = const Color(0xFFD97706); // Amber
-                        } else {
-                          priorityColor = const Color(0xFF059669); // Emerald
-                        }
-
-                        return _buildReportCard(
-                          report['description']?.toString().isNotEmpty == true
-                              ? report['description']
-                              : 'Issue Reported',
-                          '$cat • $timeAgo',
-                          status,
-                          priority,
-                          statusColor,
-                          priorityColor,
-                        );
+                        return _buildReportCard(_recentReports[index]);
                       },
                     ),
                   const SizedBox(height: 16),
@@ -615,48 +733,97 @@ class _DashboardContentState extends State<DashboardContent> {
     );
   }
 
-  Widget _buildReportCard(String title, String subtitle, String status,
-      String priority, Color statusCol, Color priorityCol) {
-    return GlassCard(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                    color: Colors.white,
+  Widget _buildReportCard(Map<String, dynamic> item) {
+    final cat = item['categories'] ?? 'Unknown';
+    final timeAgo = _formatTime(item['timestamp']);
+    final status = item['status'] ?? ReportStatus.pending;
+    final cfg = _getStatusConfig(status);
+    final description = item['description']?.toString().isNotEmpty == true
+        ? item['description']
+        : 'Issue Reported';
+
+    final priority = (cat.contains('Damage') ||
+            cat.contains('Drainage') ||
+            cat.contains('Tree'))
+        ? (status == ReportStatus.resolved ? 'Low' : 'High')
+        : (status == ReportStatus.resolved ? 'Low' : 'Medium');
+
+    Color priorityColor;
+    if (priority == 'High') {
+      priorityColor = const Color(0xFFEF4444); // Crimson
+    } else if (priority == 'Medium') {
+      priorityColor = const Color(0xFFD97706); // Amber
+    } else {
+      priorityColor = const Color(0xFF059669); // Emerald
+    }
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ReportDetailScreen(report: item),
+          ),
+        ).then((_) => _fetchDashboardData());
+      },
+      child: GlassCard(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _build3DPin(cat, cfg),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              cat,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 15,
+                                  color: Colors.white),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Row(
+                            children: [
+                              _buildTag(cfg.label, cfg.color),
+                              const SizedBox(width: 6),
+                              _buildTag(priority, priorityColor),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(timeAgo,
+                          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.w500)),
+                    ],
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-              const SizedBox(width: 8),
-              Icon(Icons.report_problem_rounded, color: priorityCol, size: 18),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              _buildTag(status, statusCol),
-              const SizedBox(width: 8),
-              _buildTag(priority, priorityCol),
-            ],
-          ),
-        ],
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              description,
+              style: const TextStyle(
+                  color: Color(0xFFE2E8F0), fontSize: 13, height: 1.4),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -759,4 +926,17 @@ class _DashboardContentState extends State<DashboardContent> {
       ),
     );
   }
+}
+
+class _StatusConfig {
+  final Color    color;
+  final Color    bg;
+  final IconData icon;
+  final String   label;
+  const _StatusConfig({
+    required this.color,
+    required this.bg,
+    required this.icon,
+    required this.label,
+  });
 }
