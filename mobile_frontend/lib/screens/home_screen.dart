@@ -26,6 +26,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
+  bool _hasUnreadNotification = false;
+  StreamSubscription<StatusChange>? _notifSub;
 
   late final List<Widget> _widgetOptions = [
     const DashboardContent(),
@@ -34,10 +36,175 @@ class _HomeScreenState extends State<HomeScreen> {
     const ProfileScreen(),
   ];
 
-  void _onItemTapped(int index) => setState(() => _selectedIndex = index);
+  @override
+  void initState() {
+    super.initState();
+    // Start listening to notification updates to badge the History tab
+    _notifSub = NotificationService.instance.changes.listen((change) {
+      if (!mounted) return;
+      setState(() {
+        _hasUnreadNotification = true;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _notifSub?.cancel();
+    super.dispose();
+  }
+
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+      if (index == 2) {
+        _hasUnreadNotification = false;
+      }
+    });
+  }
+
+  Widget _buildActiveTabIcon(IconData icon, Color activeColor, {bool showBadge = false}) {
+    return SizedBox(
+      width: 32,
+      height: 34,
+      child: Stack(
+        alignment: Alignment.topCenter,
+        clipBehavior: Clip.none,
+        children: [
+          // Shadow at the bottom
+          Positioned(
+            bottom: 1,
+            child: Container(
+              width: 10,
+              height: 2.5,
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: const BorderRadius.all(Radius.elliptical(5, 1.25)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.6),
+                    blurRadius: 1.5,
+                    spreadRadius: 0.5,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Floating Teardrop Pin
+          Positioned(
+            top: 0,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // Rotated Teardrop base
+                Transform.rotate(
+                  angle: math.pi / 4,
+                  child: Container(
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: activeColor.withOpacity(0.25),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(10),
+                        topRight: Radius.circular(10),
+                        bottomLeft: Radius.circular(10),
+                        bottomRight: Radius.zero,
+                      ),
+                      border: Border.all(
+                        color: activeColor, // Glowing border matches active tab color
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: activeColor.withOpacity(0.4),
+                          blurRadius: 4,
+                          spreadRadius: 0.5,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Icon
+                Positioned.fill(
+                  child: Center(
+                    child: Transform.rotate(
+                      angle: -math.pi / 4,
+                      child: Icon(
+                        icon,
+                        color: Colors.white,
+                        size: 11,
+                      ),
+                    ),
+                  ),
+                ),
+                // Glowing notification dot (new symbol)
+                if (showBadge)
+                  Positioned(
+                    top: -3,
+                    right: -3,
+                    child: Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEF4444), // glowing red dot
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.black, width: 0.8),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFEF4444).withOpacity(0.7),
+                            blurRadius: 4,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInactiveTabIcon(IconData icon, {bool showBadge = false}) {
+    if (!showBadge) {
+      return Icon(icon);
+    }
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Icon(icon),
+        Positioned(
+          top: -2,
+          right: -2,
+          child: Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEF4444),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.black, width: 0.8),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFEF4444).withOpacity(0.7),
+                  blurRadius: 4,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final activeColor = _selectedIndex == 1
+        ? const Color(0xFFA5B4FC)
+        : const Color(0xFF818CF8);
+
     return BackgroundDecorator(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -65,24 +232,34 @@ class _HomeScreenState extends State<HomeScreen> {
               backgroundColor: Colors.transparent,
               type: BottomNavigationBarType.fixed,
               currentIndex: _selectedIndex,
-              selectedItemColor: _selectedIndex == 1
-                  ? const Color(0xFFA5B4FC) // Lighter indigo for maximum contrast on map tab
-                  : const Color(0xFF818CF8),
+              selectedItemColor: activeColor,
               unselectedItemColor: _selectedIndex == 1
                   ? Colors.white.withOpacity(0.85) // High-contrast white for unselected items on map screen
                   : Colors.white.withOpacity(0.6), // Brighter unselected label & icon color
               selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
               unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 11),
               onTap: _onItemTapped,
-              items: const [
+              items: [
                 BottomNavigationBarItem(
-                    icon: Icon(Icons.dashboard_rounded), label: 'Home'),
+                  icon: _buildInactiveTabIcon(Icons.dashboard_rounded),
+                  activeIcon: _buildActiveTabIcon(Icons.dashboard_rounded, activeColor),
+                  label: 'Home',
+                ),
                 BottomNavigationBarItem(
-                    icon: Icon(Icons.map_rounded), label: 'Map'),
+                  icon: _buildInactiveTabIcon(Icons.map_rounded),
+                  activeIcon: _buildActiveTabIcon(Icons.map_rounded, activeColor),
+                  label: 'Map',
+                ),
                 BottomNavigationBarItem(
-                    icon: Icon(Icons.assignment_rounded), label: 'History'),
+                  icon: _buildInactiveTabIcon(Icons.assignment_rounded, showBadge: _hasUnreadNotification),
+                  activeIcon: _buildActiveTabIcon(Icons.assignment_rounded, activeColor, showBadge: _hasUnreadNotification),
+                  label: 'History',
+                ),
                 BottomNavigationBarItem(
-                    icon: Icon(Icons.person_rounded), label: 'Profile'),
+                  icon: _buildInactiveTabIcon(Icons.person_rounded),
+                  activeIcon: _buildActiveTabIcon(Icons.person_rounded, activeColor),
+                  label: 'Profile',
+                ),
               ],
             ),
           ),
