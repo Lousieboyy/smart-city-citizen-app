@@ -760,36 +760,39 @@ class _DashboardContentState extends State<DashboardContent> {
     final isWorker = UserSession.instance.role.toLowerCase().contains('worker');
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(24, 64, 24, 20),
+      padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Date at the top, separate from row to keep Row centering clean
+          Text(
+            _getFormattedDate(),
+            style: const TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 6),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _getFormattedDate(),
-                      style: const TextStyle(color: Color(0xFF64748B), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Text(
-                          isWorker ? "Worker Portal" : "Welcome back,",
-                          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14, fontWeight: FontWeight.w500),
-                        ),
-                      ],
+                      isWorker ? "Worker Portal" : "Welcome back,",
+                      style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14, fontWeight: FontWeight.w500),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       username,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 26,
+                        fontSize: 28,
                         fontWeight: FontWeight.bold,
                         letterSpacing: -0.5,
                       ),
@@ -832,7 +835,7 @@ class _DashboardContentState extends State<DashboardContent> {
               ),
             ],
           ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 24),
           Row(
             children: [
               _buildStatItem(
@@ -855,69 +858,70 @@ class _DashboardContentState extends State<DashboardContent> {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            // Underlay glow
-            Positioned(
-              right: -5,
-              top: -5,
+            // Underlay glow centered behind the card
+            Center(
               child: Container(
-                width: 40,
-                height: 40,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: accentColor.withOpacity(0.15),
-                      blurRadius: 12,
-                      spreadRadius: 2,
+                      color: accentColor.withOpacity(0.2),
+                      blurRadius: 16,
+                      spreadRadius: 3,
                     ),
                   ],
                 ),
               ),
             ),
-            GlassCard(
-              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-              margin: EdgeInsets.zero,
-              borderRadius: BorderRadius.circular(20),
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: accentColor.withOpacity(0.12),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: accentColor.withOpacity(0.2), width: 1),
+            SizedBox(
+              width: double.infinity,
+              child: GlassCard(
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+                margin: EdgeInsets.zero,
+                borderRadius: BorderRadius.circular(20),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: accentColor.withOpacity(0.12),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: accentColor.withOpacity(0.2), width: 1),
+                      ),
+                      child: Icon(icon, color: accentColor, size: 18),
                     ),
-                    child: Icon(icon, color: accentColor, size: 18),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    value,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      shadows: [
-                        Shadow(
-                          color: accentColor.withOpacity(0.3),
-                          blurRadius: 6,
-                        ),
-                      ],
+                    const SizedBox(height: 10),
+                    Text(
+                      value,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        shadows: [
+                          Shadow(
+                            color: accentColor.withOpacity(0.3),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    label.toUpperCase(),
-                    style: const TextStyle(
-                      color: Color(0xFF94A3B8),
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.0,
+                    const SizedBox(height: 3),
+                    Text(
+                      label.toUpperCase(),
+                      style: const TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.0,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
