@@ -138,6 +138,12 @@ class DBReport(Base):
     upvotes                  = Column(Integer, default=0)
 
 
+class DBReportUpvote(Base):
+    __tablename__ = "report_upvotes"
+    user_id   = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    report_id = Column(Integer, ForeignKey("reports.id"), primary_key=True)
+
+
 Base.metadata.create_all(bind=engine)
 
 # ─────────────────────────────────────────────────────────────
@@ -814,6 +820,24 @@ def upvote_report(
     report = db.query(DBReport).filter(DBReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
+
+    user_id = int(_token["sub"])
+
+    # Check if user has already upvoted this report
+    existing = db.query(DBReportUpvote).filter(
+        DBReportUpvote.user_id == user_id,
+        DBReportUpvote.report_id == report_id
+    ).first()
+
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="You have already upvoted this report."
+        )
+
+    # Record the upvote
+    new_upvote = DBReportUpvote(user_id=user_id, report_id=report_id)
+    db.add(new_upvote)
 
     report.upvotes = (report.upvotes or 0) + 1
 

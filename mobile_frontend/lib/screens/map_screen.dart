@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../services/api_service.dart';
 import 'package:latlong2/latlong.dart';
 import '../widgets/glass_card.dart';
+import 'report_detail_screen.dart';
 
 class MapViewScreen extends StatefulWidget {
   const MapViewScreen({super.key});
@@ -826,6 +827,9 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
       builder: (ctx) {
         final data = marker.rawData;
         final isResolved = data['status'] == 'Resolved';
+        final int upvotes = data['upvotes'] is int
+            ? data['upvotes']
+            : (int.tryParse(data['upvotes']?.toString() ?? '0') ?? 0);
         final hasBeforeImage = data['image_path'] != null;
         final hasAfterImage = data['completion_image_path'] != null;
         final hasBeforeAfter = isResolved && hasBeforeImage && hasAfterImage;
@@ -937,21 +941,45 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                             ),
                           ),
                           const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: statusBgCol,
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: statusTextCol.withOpacity(0.3), width: 1.0),
-                            ),
-                            child: Text(
-                              data['status'] ?? 'Pending',
-                              style: TextStyle(
-                                color: statusTextCol,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 11,
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: statusBgCol,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: statusTextCol.withOpacity(0.3), width: 1.0),
+                                ),
+                                child: Text(
+                                  data['status'] ?? 'Pending',
+                                  style: TextStyle(
+                                    color: statusTextCol,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 11,
+                                  ),
+                                ),
                               ),
-                            ),
+                              if (upvotes > 0) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEC4899).withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(color: const Color(0xFFEC4899).withOpacity(0.3), width: 1.0),
+                                  ),
+                                  child: Text(
+                                    '▲ $upvotes',
+                                    style: const TextStyle(
+                                      color: Color(0xFFEC4899),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ],
                       ),
@@ -1188,7 +1216,35 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           ],
                         ),
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 18),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 46,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ReportDetailScreen(report: data),
+                              ),
+                            ).then((_) => _fetchMapReports());
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF6366F1),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: const Text(
+                            'View Full Details',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                     ],
                   ),
                 ),
