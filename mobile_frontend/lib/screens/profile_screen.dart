@@ -283,9 +283,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   trailingText: "v1.1.0", onTap: () {
                 showAboutDialog(
                   context: context,
-                  applicationName: 'Smart City App',
+                  applicationName: 'Decision Support Reporting System',
                   applicationVersion: '1.1.0',
-                  applicationLegalese: '© 2026 Smart City Gov',
+                  applicationLegalese: '© 2026 Decision Support Reporting System',
                 );
               }),
             ]),
