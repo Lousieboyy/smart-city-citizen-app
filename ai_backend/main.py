@@ -135,6 +135,7 @@ class DBReport(Base):
     completion_ai_prediction = Column(String(128), nullable=True)
     completion_confidence    = Column(String(32), nullable=True)
     resolved_at              = Column(String(64), nullable=True)
+    upvotes                  = Column(Integer, default=0)
 
 
 Base.metadata.create_all(bind=engine)
@@ -158,6 +159,7 @@ _MIGRATION_COLS = [
     ("reports", "worker_completed",         "INTEGER DEFAULT 0"),
     ("reports", "completion_ai_prediction", "TEXT"),
     ("reports", "completion_confidence",    "TEXT"),
+    ("reports", "upvotes",                  "INTEGER DEFAULT 0"),
     ("users",   "role",                     "TEXT DEFAULT 'citizen'"),
 ]
 
@@ -503,6 +505,7 @@ def _serialize(r: DBReport) -> dict:
         "completion_ai_prediction": r.completion_ai_prediction,
         "completion_confidence":    r.completion_confidence,
         "resolved_at":              r.resolved_at,
+        "upvotes":                  r.upvotes or 0,
     }
 
 
@@ -795,6 +798,7 @@ def check_duplicate(
                 "categories": r.categories,
                 "status": r.status,
                 "distance_meters": round(distance, 1),
+                "upvotes": r.upvotes or 0,
             })
 
     return {"duplicate": len(duplicates) > 0, "matches": duplicates}
@@ -811,6 +815,8 @@ def upvote_report(
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
+    report.upvotes = (report.upvotes or 0) + 1
+
     desc = report.description or ""
     if "[Upvote count:" in desc:
         import re
@@ -822,7 +828,7 @@ def upvote_report(
         report.description = f"{desc}\n[Upvote count: 1]".strip()
 
     db.commit()
-    return {"status": "ok", "message": "Upvote recorded successfully."}
+    return {"status": "ok", "message": "Upvote recorded successfully.", "upvotes": report.upvotes}
 
 
 @app.post("/reports/")

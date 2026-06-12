@@ -144,29 +144,42 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
-  Widget _build3DPin(String category, _StatusConfig cfg) {
+  Widget _build3DPin(String category, _StatusConfig cfg, {int upvotes = 0}) {
+    final double sizeMultiplier = 1.0 + math.min(upvotes * 0.10, 0.40);
+    final double baseWidth = 24.0 * sizeMultiplier;
+    final double baseHeight = 24.0 * sizeMultiplier;
+
+    final Color glowColor = upvotes >= 5
+        ? const Color(0xFFF59E0B) // Amber gold for high votes
+        : upvotes >= 2
+            ? const Color(0xFFEC4899) // Hot pink for trending votes
+            : const Color(0xFFA5B4FC); // Standard Indigo
+
     return SizedBox(
-      width: 36,
-      height: 48,
+      width: 36 * sizeMultiplier,
+      height: 48 * sizeMultiplier,
       child: Stack(
         alignment: Alignment.topCenter,
         children: [
           // Pin Shadow (stays at bottom)
           Positioned(
             bottom: 4,
-            child: Container(
-              width: 14,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: const BorderRadius.all(Radius.elliptical(7, 2)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.55),
-                    blurRadius: 3,
-                    spreadRadius: 1,
-                  ),
-                ],
+            child: Transform.scale(
+              scale: sizeMultiplier,
+              child: Container(
+                width: 14,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: const BorderRadius.all(Radius.elliptical(7, 2)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.55),
+                      blurRadius: 3,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -180,8 +193,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 Transform.rotate(
                   angle: math.pi / 4,
                   child: Container(
-                    width: 24,
-                    height: 24,
+                    width: baseWidth,
+                    height: baseHeight,
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(0.85),
                       borderRadius: const BorderRadius.only(
@@ -191,14 +204,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         bottomRight: Radius.zero,
                       ),
                       border: Border.all(
-                        color: const Color(0xFFA5B4FC), // Glowing indigo border
-                        width: 1.5,
+                        color: glowColor, // Glowing color
+                        width: 1.5 + (upvotes * 0.4).clamp(0.0, 2.0),
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFFA5B4FC).withOpacity(0.35),
-                          blurRadius: 5,
-                          spreadRadius: 0.5,
+                          color: glowColor.withOpacity(0.35 + (upvotes * 0.05).clamp(0.0, 0.45)),
+                          blurRadius: 5 + upvotes * 2.0,
+                          spreadRadius: 0.5 + upvotes * 0.3,
                         ),
                       ],
                     ),
@@ -212,7 +225,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       child: Icon(
                         _getCategoryIcon(category),
                         color: Colors.white,
-                        size: 13,
+                        size: 13 * sizeMultiplier,
                       ),
                     ),
                   ),
@@ -222,8 +235,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   top: -3,
                   right: -3,
                   child: Container(
-                    width: 7,
-                    height: 7,
+                    width: 7 * sizeMultiplier,
+                    height: 7 * sizeMultiplier,
                     decoration: BoxDecoration(
                       color: cfg.color,
                       shape: BoxShape.circle,
@@ -238,6 +251,28 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                   ),
                 ),
+                // Upvotes indicator
+                if (upvotes > 0)
+                  Positioned(
+                    bottom: -3,
+                    right: -3,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0.5),
+                      decoration: BoxDecoration(
+                        color: glowColor,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.black, width: 1.0),
+                      ),
+                      child: Text(
+                        "+$upvotes",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 7,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -403,6 +438,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final status = item['status'] ?? ReportStatus.pending;
     final cfg    = _getStatusConfig(status);
     final rawAddress = item['address'] ?? item['location'] ?? 'Location unknown';
+    final int upvotes = item['upvotes'] is int
+        ? item['upvotes']
+        : (int.tryParse(item['upvotes']?.toString() ?? '0') ?? 0);
 
     final isCoords = rawAddress.toString().startsWith('Lat:') ||
                      rawAddress.toString().contains('Lon:') ||
@@ -438,7 +476,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _build3DPin(item['categories'] ?? '', cfg),
+                _build3DPin(item['categories'] ?? '', cfg, upvotes: upvotes),
                 const SizedBox(width: 14),
                   Expanded(
                     child: Column(
@@ -460,18 +498,39 @@ class _HistoryScreenState extends State<HistoryScreen> {
                               ),
                             ),
                             const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                  color: cfg.color.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: cfg.color.withOpacity(0.2))),
-                              child: Text(cfg.label,
-                                  style: TextStyle(
-                                      color: cfg.color,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold)),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                      color: cfg.color.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(color: cfg.color.withOpacity(0.2))),
+                                  child: Text(cfg.label,
+                                      style: TextStyle(
+                                          color: cfg.color,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold)),
+                                ),
+                                if (upvotes > 0) ...[
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 4),
+                                    decoration: BoxDecoration(
+                                        color: const Color(0xFFEC4899).withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(color: const Color(0xFFEC4899).withOpacity(0.2))),
+                                    child: Text('▲ $upvotes Upvotes',
+                                        style: const TextStyle(
+                                            color: Color(0xFFEC4899),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold)),
+                                  ),
+                                ],
+                              ],
                             ),
                           ],
                         ),

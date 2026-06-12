@@ -347,6 +347,9 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
   /// Builds a single high-contrast capsule pin marker representation styled like the navbar (dark frosted glass + indigo outline).
   Widget _buildSinglePin(_IssueMarker issue) {
     final status = (issue.rawData['status'] ?? 'Pending').toString();
+    final int upvotes = issue.rawData['upvotes'] is int
+        ? issue.rawData['upvotes']
+        : (int.tryParse(issue.rawData['upvotes']?.toString() ?? '0') ?? 0);
     
     Color statusColor;
     bool shouldPulse = false;
@@ -362,6 +365,16 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
       statusColor = const Color(0xFF10B981); // Resolved emerald
     }
 
+    final double sizeMultiplier = 1.0 + math.min(upvotes * 0.15, 0.60);
+    final double baseWidth = 24.0 * sizeMultiplier;
+    final double baseHeight = 24.0 * sizeMultiplier;
+    
+    final Color glowColor = upvotes >= 5
+        ? const Color(0xFFF59E0B) // Amber gold for high votes
+        : upvotes >= 2
+            ? const Color(0xFFEC4899) // Hot pink for trending votes
+            : const Color(0xFFA5B4FC); // Standard Indigo
+
     return AnimatedBuilder(
       animation: _pulseController,
       builder: (context, child) {
@@ -372,13 +385,13 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
         final double floatVal = math.sin(pulseVal * math.pi);
         final double translationY = -3.0 * floatVal;
-        final double shadowOpacity = 0.4 - 0.25 * floatVal;
-        final double shadowScale = 1.0 - 0.3 * floatVal;
+        final double shadowOpacity = (0.4 - 0.25 * floatVal) * sizeMultiplier;
+        final double shadowScale = (1.0 - 0.3 * floatVal) * sizeMultiplier;
 
         return SizedBox(
           key: ValueKey('pin_${issue.id}'),
-          width: 32,
-          height: 48,
+          width: 42 * sizeMultiplier,
+          height: 58 * sizeMultiplier,
           child: Stack(
             alignment: Alignment.topCenter,
             children: [
@@ -388,18 +401,18 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                 child: Transform.scale(
                   scale: shadowScale,
                   child: Opacity(
-                    opacity: shadowOpacity,
+                    opacity: math.min(shadowOpacity, 1.0),
                     child: Container(
-                      width: 12,
+                      width: 14,
                       height: 4,
                       decoration: BoxDecoration(
                         color: Colors.black,
-                        borderRadius: const BorderRadius.all(Radius.elliptical(6, 2)),
+                        borderRadius: const BorderRadius.all(Radius.elliptical(7, 2)),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withOpacity(0.6),
-                            blurRadius: 3,
-                            spreadRadius: 1,
+                            blurRadius: 3 * sizeMultiplier,
+                            spreadRadius: 1 * sizeMultiplier,
                           ),
                         ],
                       ),
@@ -419,8 +432,8 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       Transform.rotate(
                         angle: math.pi / 4,
                         child: Container(
-                          width: 24,
-                          height: 24,
+                          width: baseWidth,
+                          height: baseHeight,
                           decoration: BoxDecoration(
                             color: Colors.black.withOpacity(0.85),
                             borderRadius: const BorderRadius.only(
@@ -430,14 +443,14 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                               bottomRight: Radius.zero,
                             ),
                             border: Border.all(
-                              color: const Color(0xFFA5B4FC),
-                              width: 1.5,
+                              color: glowColor,
+                              width: 1.5 + (upvotes * 0.4).clamp(0.0, 2.5),
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: const Color(0xFFA5B4FC).withOpacity(0.35),
-                                blurRadius: 5,
-                                spreadRadius: 0.5,
+                                color: glowColor.withOpacity(0.35 + (upvotes * 0.05).clamp(0.0, 0.4)),
+                                blurRadius: 5 + upvotes * 3.0,
+                                spreadRadius: 0.5 + upvotes * 0.5,
                               ),
                             ],
                           ),
@@ -451,7 +464,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                             child: Icon(
                               _getCategoryIcon(issue.label),
                               color: Colors.white,
-                              size: 13,
+                              size: 13 * sizeMultiplier,
                             ),
                           ),
                         ),
@@ -461,8 +474,8 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                         top: -3,
                         right: -3,
                         child: Container(
-                          width: 7,
-                          height: 7,
+                          width: 8 * sizeMultiplier,
+                          height: 8 * sizeMultiplier,
                           decoration: BoxDecoration(
                             color: statusColor.withOpacity(statusOpacity),
                             shape: BoxShape.circle,
@@ -477,6 +490,35 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           ),
                         ),
                       ),
+                      // 4. Upvotes Count Pill Badge (displayed on bottom right of the pin if upvotes > 0)
+                      if (upvotes > 0)
+                        Positioned(
+                          bottom: -4,
+                          right: -4,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: glowColor,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.black, width: 1.0),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: glowColor.withOpacity(0.4),
+                                  blurRadius: 3,
+                                  spreadRadius: 0.5,
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              "+$upvotes",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),

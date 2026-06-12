@@ -300,15 +300,21 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                     ),
                     const SizedBox(height: 6),
                     
-                    // Reported At timestamp
+                    // Reported At timestamp & Upvote Button
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Icon(Icons.access_time_rounded, color: Color(0xFF94A3B8), size: 14),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Reported at: ${_formatTime(_report['timestamp'])}',
-                          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13, fontWeight: FontWeight.w400),
+                        Row(
+                          children: [
+                            const Icon(Icons.access_time_rounded, color: Color(0xFF94A3B8), size: 14),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Reported at: ${_formatTime(_report['timestamp'])}',
+                              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13, fontWeight: FontWeight.w400),
+                            ),
+                          ],
                         ),
+                        _buildUpvoteButton(),
                       ],
                     ),
 
@@ -368,6 +374,85 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
   }
 
   // ── Helper UI Widgets ──────────────────────────────────────────────────────
+
+  Widget _buildUpvoteButton() {
+    final int upvotes = _report['upvotes'] is int
+        ? _report['upvotes']
+        : (int.tryParse(_report['upvotes']?.toString() ?? '0') ?? 0);
+    final userRole = UserSession.instance.role;
+    final isResolved = _report['status'] == 'Resolved';
+
+    final Color glowColor = upvotes >= 5
+        ? const Color(0xFFF59E0B)
+        : upvotes >= 2
+            ? const Color(0xFFEC4899)
+            : const Color(0xFFA5B4FC);
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 300),
+      child: isResolved
+          ? const SizedBox.shrink()
+          : TextButton.icon(
+              onPressed: _isLoadingAction
+                  ? null
+                  : () async {
+                      setState(() => _isLoadingAction = true);
+                      try {
+                        final res = await ApiService.upvoteReport(_report['id']);
+                        if (res.statusCode == 200) {
+                          final data = jsonDecode(res.body);
+                          _showSnackBar('Upvote recorded! Thanks for supporting this report.', Colors.green);
+                          setState(() {
+                            final newCount = data['upvotes'] ?? (upvotes + 1);
+                            _report['upvotes'] = newCount;
+                            
+                            final desc = _report['description'] ?? "";
+                            if (desc.contains('[Upvote count:')) {
+                              _report['description'] = desc.replaceAll(
+                                RegExp(r'\[Upvote count:\s*\d+\]'),
+                                '[Upvote count: $newCount]',
+                              );
+                            } else {
+                              _report['description'] = "$desc\n[Upvote count: $newCount]".trim();
+                            }
+                          });
+                        } else {
+                          _showSnackBar('Failed to upvote report.', Colors.redAccent);
+                        }
+                      } catch (e) {
+                        _showSnackBar('Connection error: $e', Colors.redAccent);
+                      } finally {
+                        if (mounted) setState(() => _isLoadingAction = false);
+                      }
+                    },
+              icon: Icon(
+                Icons.thumb_up_alt_rounded,
+                size: 14,
+                color: upvotes > 0 ? glowColor : const Color(0xFF94A3B8),
+              ),
+              label: Text(
+                upvotes > 0 ? '$upvotes Upvotes' : 'Upvote',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: upvotes > 0 ? glowColor : const Color(0xFF94A3B8),
+                ),
+              ),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                backgroundColor: upvotes > 0 ? glowColor.withOpacity(0.12) : Colors.white.withOpacity(0.04),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(
+                    color: upvotes > 0 ? glowColor.withOpacity(0.3) : Colors.white.withOpacity(0.08),
+                    width: 1.0,
+                  ),
+                ),
+              ),
+            ),
+    );
+  }
 
   Widget _buildImageHeader() {
     final hasImage = _report['image_path'] != null && _report['image_path'].toString().isNotEmpty;
