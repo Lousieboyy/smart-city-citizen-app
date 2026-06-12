@@ -736,6 +736,95 @@ def get_report_timeline(
     return [{"date": d, "count": c} for d, c in sorted_days]
 
 
+
+@app.get("/reports/check-duplicate")
+def check_duplicate(
+    latitude: float,
+    longitude: float,
+    categories: str,
+    radius_meters: float = 50.0,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """
+    Check if an unresolved report exists in the database within a given radius
+    that matches the category.
+    """
+    import math
+
+    lat_delta = radius_meters / 111000.0
+    cos_lat = math.cos(math.radians(latitude))
+    if abs(cos_lat) < 0.001:
+        cos_lat = 0.001
+    lon_delta = radius_meters / (111000.0 * cos_lat)
+
+    query = db.query(DBReport).filter(
+        DBReport.status != "Resolved",
+        DBReport.latitude >= latitude - lat_delta,
+        DBReport.latitude <= latitude + lat_delta,
+        DBReport.longitude >= longitude - lon_delta,
+        DBReport.longitude <= longitude + lon_delta,
+    )
+
+    candidates = query.all()
+
+    duplicates = []
+    for r in candidates:
+        if r.latitude is None or r.longitude is None:
+            continue
+
+        # Check category overlap
+        r_cats = [c.strip() for c in (r.categories or "").split(",") if c.strip()]
+        user_cats = [c.strip() for c in categories.split(",") if c.strip()]
+        overlap = set(r_cats).intersection(set(user_cats))
+        if not overlap:
+            continue
+
+        # Haversine distance
+        dlat = math.radians(r.latitude - latitude)
+        dlon = math.radians(r.longitude - longitude)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(latitude)) * math.cos(math.radians(r.latitude)) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        distance = 6371000.0 * c  # meters
+
+        if distance <= radius_meters:
+            duplicates.append({
+                "id": r.id,
+                "description": r.description,
+                "address": r.address,
+                "categories": r.categories,
+                "status": r.status,
+                "distance_meters": round(distance, 1),
+            })
+
+    return {"duplicate": len(duplicates) > 0, "matches": duplicates}
+
+
+@app.post("/reports/{report_id}/upvote")
+def upvote_report(
+    report_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Record an upvote for a duplicate report inside its description."""
+    report = db.query(DBReport).filter(DBReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    desc = report.description or ""
+    if "[Upvote count:" in desc:
+        import re
+        match = re.search(r"\[Upvote count:\s*(\d+)\]", desc)
+        if match:
+            count = int(match.group(1)) + 1
+            report.description = re.sub(r"\[Upvote count:\s*\d+\]", f"[Upvote count: {count}]", desc)
+    else:
+        report.description = f"{desc}\n[Upvote count: 1]".strip()
+
+    db.commit()
+    return {"status": "ok", "message": "Upvote recorded successfully."}
+
+
 @app.post("/reports/")
 async def create_report(
     user_id:       int   = Form(...),

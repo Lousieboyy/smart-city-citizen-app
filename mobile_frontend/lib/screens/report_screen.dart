@@ -273,6 +273,43 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       return;
     }
 
+    // Option 3: Location-Aware Duplicate Checker
+    if (_latitude != null && _longitude != null) {
+      setState(() => _isSubmitting = true);
+      try {
+        final checkRes = await ApiService.checkDuplicate(
+          _latitude!,
+          _longitude!,
+          _selectedCategories.join(', '),
+        );
+        setState(() => _isSubmitting = false);
+        
+        if (checkRes.statusCode == 200) {
+          final data = jsonDecode(checkRes.body);
+          if (data['duplicate'] == true && data['matches'] != null && (data['matches'] as List).isNotEmpty) {
+            final duplicateReport = data['matches'][0];
+            final int duplicateId = duplicateReport['id'];
+            final String dupAddress = duplicateReport['address'] ?? 'Nearby location';
+            final double dupDist = (duplicateReport['distance_meters'] as num?)?.toDouble() ?? 0.0;
+            
+            final bool? upvoteResult = await _showDuplicateWarningDialog(dupAddress, dupDist, duplicateId);
+            if (upvoteResult == true) {
+              if (mounted) {
+                Navigator.pop(context, true);
+              }
+              return; // Upvoted and exited
+            } else if (upvoteResult == null) {
+              return; // User canceled submission
+            }
+            // If upvoteResult is false, user chose "Submit anyway". We fall through and submit!
+          }
+        }
+      } catch (e) {
+        debugPrint('[Duplicate Check] error: $e');
+        setState(() => _isSubmitting = false);
+      }
+    }
+
     setState(() => _isSubmitting = true);
 
     try {
@@ -314,6 +351,153 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       backgroundColor: isError ? Colors.redAccent : Colors.green,
       behavior: SnackBarBehavior.floating,
     ));
+  }
+
+  void _enhanceDescription() {
+    if (_aiRawResult == null || _aiRawResult!.isEmpty) {
+      _showSnack('Please upload an image and run AI scan first.', isError: true);
+      return;
+    }
+    
+    final issue = _aiRawResult!.toLowerCase();
+    String enhanced = '';
+    
+    if (issue.contains('pothole')) {
+      enhanced = 'A pothole has been detected in the road. The asphalt has eroded, creating a deep depression that presents a hazard to passing traffic and local drivers.';
+    } else if (issue.contains('street light') || issue.contains('lamp')) {
+      enhanced = 'A street light malfunction has been identified. The area is dark at night, causing safety concerns for pedestrians and reducing visibility for drivers.';
+    } else if (issue.contains('waste') || issue.contains('dumping') || issue.contains('garbage')) {
+      enhanced = 'Illegal dumping/waste accumulation has been spotted. There is piled garbage that requires urgent removal to prevent sanitation issues and blockages.';
+    } else if (issue.contains('drainage') || issue.contains('clog') || issue.contains('water')) {
+      enhanced = 'A drainage block or overflow has been detected. Water is pooling, which could lead to flooding and local road hazards.';
+    } else if (issue.contains('construction') || issue.contains('road work')) {
+      enhanced = 'Road construction or maintenance work is blocking traffic flow without proper warning signs or safety indicators.';
+    } else if (issue.contains('tree') || issue.contains('vegetation')) {
+      enhanced = 'Overgrown vegetation or a fallen branch is obstructing the road/sidewalk path, making it difficult for vehicles and pedestrians to pass.';
+    } else {
+      enhanced = 'An issue regarding $_aiRawResult has been detected at this location. Needs municipal attention for maintenance and restoration.';
+    }
+    
+    setState(() {
+      _descriptionController.text = enhanced;
+    });
+    
+    _showSnack('AI description generated!', isError: false);
+  }
+
+  Future<bool?> _showDuplicateWarningDialog(String address, double distance, int duplicateId) {
+    return showDialog<bool?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        bool upvoting = false;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1B4B),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(color: const Color(0xFF818CF8).withOpacity(0.35), width: 1.5),
+              ),
+              title: Row(
+                children: const [
+                  Icon(Icons.warning_amber_rounded, color: Color(0xFFF59E0B), size: 24),
+                  SizedBox(width: 8),
+                  Text(
+                    "Nearby Report Found",
+                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Our system detected a similar issue already reported nearby:",
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Location: $address",
+                          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          "Distance: ${distance.toStringAsFixed(1)} meters away",
+                          style: const TextStyle(color: Color(0xFFA5B4FC), fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    "Would you like to upvote the existing report to help prioritize it, or submit your report anyway?",
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ],
+              ),
+              actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              actions: [
+                TextButton(
+                  onPressed: upvoting ? null : () => Navigator.pop(context, null),
+                  child: const Text("Cancel", style: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                TextButton(
+                  onPressed: upvoting ? null : () => Navigator.pop(context, false),
+                  child: const Text("Submit anyway", style: TextStyle(color: Color(0xFFEF4444))),
+                ),
+                ElevatedButton(
+                  onPressed: upvoting
+                      ? null
+                      : () async {
+                          setDialogState(() => upvoting = true);
+                          try {
+                            final upRes = await ApiService.upvoteReport(duplicateId);
+                            if (upRes.statusCode == 200) {
+                              _showSnack('Upvote recorded! Thanks for keeping the reports clean.', isError: false);
+                              if (context.mounted) {
+                                Navigator.pop(context, true);
+                              }
+                            } else {
+                              _showSnack('Failed to record upvote.', isError: true);
+                            }
+                          } catch (e) {
+                            _showSnack('Error upvoting: $e', isError: true);
+                          } finally {
+                            setDialogState(() => upvoting = false);
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6366F1),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: upvoting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text("Upvote Existing", style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   // ── BUILD ─────────────────────────────────────────────────────────────────
@@ -671,35 +855,74 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildDescriptionField() {
-    return TextFormField(
-      controller: _descriptionController,
-      maxLines: 4,
-      maxLength: 500,
-      style: const TextStyle(fontSize: 14, color: Colors.white),
-      decoration: InputDecoration(
-        hintText: "Describe the issue in detail (e.g. size, exact spot, hazard level)…",
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.04),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: Colors.white.withOpacity(0.12), width: 1.0),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              "DESCRIPTION",
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF94A3B8),
+                letterSpacing: 0.8,
+              ),
+            ),
+            if (_image != null && !_isAnalyzing && _aiRawResult != null)
+              TextButton.icon(
+                onPressed: _enhanceDescription,
+                icon: const Icon(Icons.auto_awesome, size: 14, color: Color(0xFFA5B4FC)),
+                label: const Text(
+                  "AI Enhance",
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFA5B4FC),
+                  ),
+                ),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  backgroundColor: const Color(0xFF818CF8).withOpacity(0.12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+          ],
         ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: Colors.white.withOpacity(0.12), width: 1.0),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: _descriptionController,
+          maxLines: 4,
+          maxLength: 500,
+          style: const TextStyle(fontSize: 14, color: Colors.white),
+          decoration: InputDecoration(
+            hintText: "Describe the issue in detail (e.g. size, exact spot, hazard level)…",
+            filled: true,
+            fillColor: Colors.white.withOpacity(0.04),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: Colors.white.withOpacity(0.12), width: 1.0),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: Colors.white.withOpacity(0.12), width: 1.0),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: Color(0xFF818CF8), width: 1.5),
+            ),
+            counterStyle: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+          ),
+          validator: (value) {
+            if (value == null || value.trim().isEmpty) {
+              return 'Please add a brief description of the issue.';
+            }
+            return null;
+          },
         ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFF818CF8), width: 1.5),
-        ),
-        counterStyle: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-      ),
-      validator: (value) {
-        if (value == null || value.trim().isEmpty) {
-          return 'Please add a brief description of the issue.';
-        }
-        return null;
-      },
+      ],
     );
   }
 

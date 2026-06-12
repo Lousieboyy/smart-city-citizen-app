@@ -99,6 +99,30 @@ class ApiService {
     return req.send().timeout(const Duration(seconds: 10));
   }
 
+  // ── Duplicate Check & Upvoting ──────────────────────────────────────────
+
+  /// Check if a duplicate report exists near coordinates matching the categories.
+  static Future<http.Response> checkDuplicate(
+      double latitude, double longitude, String categories) {
+    final uri = Uri.parse('$baseUrl/reports/check-duplicate').replace(
+      queryParameters: {
+        'latitude': latitude.toString(),
+        'longitude': longitude.toString(),
+        'categories': categories,
+        'radius_meters': '50.0',
+      },
+    );
+    return http.get(uri, headers: _authHeaders).timeout(const Duration(seconds: 10));
+  }
+
+  /// Record an upvote for a duplicate report.
+  static Future<http.Response> upvoteReport(int reportId) {
+    return http.post(
+      Uri.parse('$baseUrl/reports/$reportId/upvote'),
+      headers: _authHeaders,
+    ).timeout(const Duration(seconds: 10));
+  }
+
   // ── Report Submission ────────────────────────────────────────────────────
 
   /// Submit using a file path (mobile only).
