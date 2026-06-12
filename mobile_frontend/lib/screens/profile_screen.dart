@@ -188,35 +188,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ],
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF818CF8).withOpacity(0.18),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: const Color(0xFFA5B4FC).withOpacity(0.35), width: 1.0),
-                        ),
-                        child: Text(
-                          _role.toUpperCase(),
-                          style: const TextStyle(
-                              color: Color(0xFFE0E7FF),
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 1.2),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Text(
-                        _username,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold),
-                      ),
-                    ],
+                  Text(_username,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF818CF8).withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFFA5B4FC).withOpacity(0.35), width: 1.0),
+                    ),
+                    child: Text(
+                      _role.toUpperCase(),
+                      style: const TextStyle(
+                          color: Color(0xFFE0E7FF),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.2),
+                    ),
                   ),
                   const SizedBox(height: 28),
                   Padding(
