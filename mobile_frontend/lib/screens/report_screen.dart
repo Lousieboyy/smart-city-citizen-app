@@ -449,68 +449,173 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   Widget _buildAIAnalysisCard() {
     if (_image == null) return const SizedBox.shrink();
     final isNormal = _selectedCategories.contains('Normal');
-    final activeColor = isNormal ? const Color(0xFF059669) : const Color(0xFF818CF8);
+    final activeColor = isNormal ? const Color(0xFF34D399) : const Color(0xFF818CF8);
 
     return GlassCard(
-      margin: const EdgeInsets.only(top: 16),
-      borderColor: activeColor.withOpacity(0.3),
-      color: activeColor.withOpacity(0.08),
-      child: _isAnalyzing
-          ? Row(
-              children: const [
-                SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Color(0xFF94A3B8))),
-                SizedBox(width: 12),
-                Text("AI classification in progress…",
-                    style: TextStyle(
-                        color: Color(0xFF94A3B8), fontWeight: FontWeight.w500, fontSize: 13)),
-              ],
+      margin: const EdgeInsets.only(top: 20),
+      borderColor: activeColor.withOpacity(0.35),
+      color: activeColor.withOpacity(0.06),
+      child: Container(
+        decoration: BoxDecoration(
+          boxShadow: [
+            BoxShadow(
+              color: activeColor.withOpacity(0.04),
+              blurRadius: 20,
+              spreadRadius: 2,
             )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                        isNormal
-                            ? Icons.check_circle_rounded
-                            : Icons.auto_awesome,
-                        color: activeColor,
-                        size: 20),
-                    const SizedBox(width: 8),
-                    const Text("AI COMPUTER VISION SCAN",
+          ],
+        ),
+        child: _isAnalyzing
+            ? Row(
+                children: [
+                  SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: activeColor,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: const [
+                        Text(
+                          "AI COMPUTER VISION SCANNING",
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 10,
+                              color: Color(0xFFA5B4FC),
+                              letterSpacing: 1.0),
+                        ),
+                        SizedBox(height: 3),
+                        Text(
+                          "Analyzing image features & infrastructure hazards...",
+                          style: TextStyle(
+                              color: Color(0xFF94A3B8),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w400),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                          isNormal
+                              ? Icons.verified_rounded
+                              : Icons.auto_awesome_rounded,
+                          color: activeColor,
+                          size: 20),
+                      const SizedBox(width: 8),
+                      const Text(
+                        "AI COMPUTER VISION SCAN",
                         style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 11,
                             color: Colors.white,
-                            letterSpacing: 0.5)),
-                    const Spacer(),
-                    if (_confidence != null)
-                      Text("$_confidence Match",
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white)),
-                  ],
-                ),
-                const Divider(height: 24, color: Colors.white12),
-                Text(
-                  "Detected Issue: ${_aiRawResult ?? 'None'}",
-                  style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  "Recommended Category: ${_selectedCategories.isEmpty ? 'Manual Selection' : _selectedCategories.join(', ')}",
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: activeColor),
-                ),
-              ],
-            ),
+                            letterSpacing: 1.0),
+                      ),
+                      const Spacer(),
+                      if (_confidence != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [activeColor, activeColor.withOpacity(0.7)],
+                            ),
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: activeColor.withOpacity(0.35),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              )
+                            ],
+                          ),
+                          child: Text(
+                            "$_confidence MATCH",
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 10,
+                                color: Colors.white,
+                                letterSpacing: 0.8),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const Divider(height: 24, color: Colors.white12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Text(
+                        "Detected Issue:  ",
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF94A3B8)),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: activeColor.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: activeColor.withOpacity(0.25), width: 1.0),
+                        ),
+                        child: Text(
+                          (_aiRawResult ?? 'None').toUpperCase(),
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: activeColor,
+                              letterSpacing: 0.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Text(
+                        "Auto-selected Category:  ",
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF94A3B8)),
+                      ),
+                      Text(
+                        _selectedCategories.isEmpty ? 'Manual Selection' : _selectedCategories.join(', '),
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Icon(Icons.check_circle_outline_rounded, size: 14, color: activeColor),
+                      const SizedBox(width: 6),
+                      Text(
+                        "Categories pre-selected based on AI confidence.",
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: activeColor.withOpacity(0.85),
+                            fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+      ),
     );
   }
 
