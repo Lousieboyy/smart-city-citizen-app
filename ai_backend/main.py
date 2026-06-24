@@ -1744,13 +1744,23 @@ class ApiPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
+@app.get("/")
+async def read_root():
+    return {
+        "status": "online",
+        "service": "Smart City AI Engine API",
+        "version": "1.1.0",
+        "documentation": "/docs",
+        "health": "/healthz"
+    }
+
+
 @app.get("/{catchall:path}")
-async def serve_react_app(catchall: str):
-    dist_dir = Path("c:/Users/User/decision_support_system_web/dist")
-    file_path = dist_dir / catchall
-    if file_path.is_file():
-        return FileResponse(file_path)
-    return FileResponse(dist_dir / "index.html")
+async def catch_all(catchall: str):
+    raise HTTPException(
+        status_code=404, 
+        detail=f"Path '/{catchall}' not found. Refer to '/docs' for available API endpoints."
+    )
 
 
 app = ApiPrefixMiddleware(app)
