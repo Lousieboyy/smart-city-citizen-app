@@ -57,14 +57,8 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 import tensorflow as tf  # noqa: F401 — needed to load keras model
 from tensorflow.keras.models import load_model
 import cv2
-# Import NudeDetector conditionally to avoid ONNX Runtime segfaults on cloud hosts
+# Disable NSFW detector completely to prevent ONNX Runtime/C++ segfaults on cloud environments
 nude_detector_available = False
-if os.getenv("DISABLE_NSFW_DETECTOR", "False").lower() != "true":
-    try:
-        from nudenet import NudeDetector
-        nude_detector_available = True
-    except ImportError:
-        pass
 
 # ─────────────────────────────────────────────────────────────
 #  CONFIGURATION  (load from .env so secrets stay out of git)
