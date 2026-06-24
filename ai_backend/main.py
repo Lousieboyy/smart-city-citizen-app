@@ -57,7 +57,14 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 import tensorflow as tf  # noqa: F401 — needed to load keras model
 from tensorflow.keras.models import load_model
 import cv2
-from nudenet import NudeDetector
+# Import NudeDetector conditionally to avoid ONNX Runtime segfaults on cloud hosts
+nude_detector_available = False
+if os.getenv("DISABLE_NSFW_DETECTOR", "False").lower() != "true":
+    try:
+        from nudenet import NudeDetector
+        nude_detector_available = True
+    except ImportError:
+        pass
 
 # ─────────────────────────────────────────────────────────────
 #  CONFIGURATION  (load from .env so secrets stay out of git)
@@ -501,12 +508,16 @@ def startup_event():
     print("[Startup OK] Model warmed up and ready.")
     
     # 7. Initialize NSFW detector
-    try:
-        print("[Startup] Initializing NSFW Content Moderation Detector...")
-        nude_detector = NudeDetector()
-        print("[Startup OK] NSFW Content Moderation Detector initialized successfully.")
-    except Exception as e:
-        print(f"[Startup Warning] Failed to initialize NSFW detector: {e}")
+    if nude_detector_available:
+        try:
+            print("[Startup] Initializing NSFW Content Moderation Detector...")
+            nude_detector = NudeDetector()
+            print("[Startup OK] NSFW Content Moderation Detector initialized successfully.")
+        except Exception as e:
+            print(f"[Startup Warning] Failed to initialize NSFW detector: {e}")
+            nude_detector = None
+    else:
+        print("[Startup] NSFW Content Moderation Detector is disabled or unavailable.")
         nude_detector = None
 
 
