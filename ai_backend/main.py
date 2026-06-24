@@ -54,8 +54,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
-import tensorflow as tf  # noqa: F401 — needed to load keras model
-from tensorflow.keras.models import load_model
+# TensorFlow is completely removed to prevent AVX instruction set crashes on cloud CPUs.
+# We use lightweight tflite-runtime instead.
+tf = None
 import cv2
 # Disable NSFW detector completely to prevent ONNX Runtime/C++ segfaults on cloud environments
 nude_detector_available = False
@@ -470,35 +471,29 @@ def startup_event():
             f"Critical Error: Ensure both '{MODEL_PATH.name}' and '{LABELS_PATH.name}' exist."
         )
         
-    # 3. Load Keras model
-    print("[Startup] Loading Keras model...")
-    model = load_model(MODEL_PATH, compile=False)
-    print("[Startup] Keras model loaded successfully.")
+    # 3. Load TFLite model
+    print("[Startup] Loading TFLite model...")
+    import tflite_runtime.interpreter as tflite
+    global interpreter, input_details, output_details
+    interpreter = tflite.Interpreter(model_path=str(BASE_DIR / "model.tflite"))
+    interpreter.allocate_tensors()
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    print("[Startup] TFLite model loaded successfully.")
     
-    # 4. Setup base grad model for Grad-CAM
-    base_model = None
-    for layer in model.layers:
-        if "mobilenet" in layer.name:
-            base_model = layer
-            break
-    if base_model:
-        base_grad_model = tf.keras.Model(
-            inputs=base_model.inputs,
-            outputs=[base_model.get_layer("out_relu").output, base_model.output]
-        )
-        print("[Startup] Grad-CAM Base model initialized successfully.")
-    else:
-        base_grad_model = None
-        print("[Startup WARNING] Could not find MobileNetV2 base model layer for Grad-CAM.")
+    # 4. Grad-CAM is disabled in TFLite production mode
+    base_grad_model = None
+    print("[Startup] Grad-CAM is disabled (running in TFLite CPU mode).")
         
     # 5. Load class labels
     with open(LABELS_PATH, "r") as f:
         class_names = [line.strip() for line in f.readlines()]
         
     # 6. Warm up the model
-    print("[Startup] Warming up Keras model...")
+    print("[Startup] Warming up TFLite model...")
     _dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
-    model.predict(_dummy, verbose=0)
+    interpreter.set_tensor(input_details[0]['index'], _dummy)
+    interpreter.invoke()
     print("[Startup OK] Model warmed up and ready.")
     
     # 7. Initialize NSFW detector
@@ -683,7 +678,10 @@ def _ai_inference_sync(contents: bytes) -> tuple[str, str, list[dict]]:
     arr = np.asarray(image).astype(np.float32)
     data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
     data[0] = (arr / 127.5) - 1
-    prediction = model.predict(data, verbose=0)[0]
+    # Set input tensor and invoke interpreter
+    interpreter.set_tensor(input_details[0]['index'], data)
+    interpreter.invoke()
+    prediction = interpreter.get_tensor(output_details[0]['index'])[0]
     
     # Extract predictions for all classes
     results = []

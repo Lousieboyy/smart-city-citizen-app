@@ -13,13 +13,10 @@ python-jose[cryptography]
 passlib[bcrypt]
 bcrypt==4.0.1
 
-# AI & Image Processing
-tensorflow
+# AI & Image Processing (Running in Lightweight TFLite mode)
+tflite-runtime
 opencv-python-headless
-nudenet
 pillow
-h5py
-scikit-learn
 
 # Pin NumPy 1.x to prevent Segmentation Faults (Exit 139) with TensorFlow/NudeNet
 numpy<2.0.0
