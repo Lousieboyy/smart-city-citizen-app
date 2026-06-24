@@ -23,6 +23,15 @@ Fixes applied vs. original:
 import asyncio
 import io
 import os
+
+# Limit TensorFlow memory and thread footprint to run under 512MB RAM (Render Free Tier)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -430,11 +439,15 @@ def seed_database():
         db.close()
 
 
-seed_database()
+# ─────────────────────────────────────────────────────────────
+#  GLOBAL VARIABLES & LAZY LOAD ON STARTUP
+#  (Prevents 'free(): invalid pointer' segfaults caused by Uvicorn process forking)
+# ─────────────────────────────────────────────────────────────
+model = None
+base_grad_model = None
+nude_detector = None
+class_names = []
 
-# ─────────────────────────────────────────────────────────────
-#  AI MODEL SETUP
-# ─────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "keras_Model.h5"
 LABELS_PATH = BASE_DIR / "labels.txt"
@@ -443,47 +456,58 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-if not MODEL_PATH.exists() or not LABELS_PATH.exists():
-    raise FileNotFoundError(
-        f"Critical Error: Ensure both '{MODEL_PATH.name}' and '{LABELS_PATH.name}' exist."
-    )
-
-model = load_model(MODEL_PATH, compile=False)
-
-# Setup base grad model for Grad-CAM
-base_model = None
-for layer in model.layers:
-    if "mobilenet" in layer.name:
-        base_model = layer
-        break
-if base_model:
-    base_grad_model = tf.keras.Model(
-        inputs=base_model.inputs,
-        outputs=[base_model.get_layer("out_relu").output, base_model.output]
-    )
-    print("[OK] Grad-CAM Base model initialized successfully.")
-else:
-    base_grad_model = None
-    print("[WARNING] Could not find MobileNetV2 base model layer for Grad-CAM.")
-
-with open(LABELS_PATH, "r") as f:
-    class_names = [line.strip() for line in f.readlines()]
-
-# Warm-up pass so the first real request is fast
-_dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
-model.predict(_dummy, verbose=0)
-print("[OK] Model warmed up and ready.")
-
-
-# ─────────────────────────────────────────────────────────────
-#  NSFW / CONTENT MODERATION SETUP
-# ─────────────────────────────────────────────────────────────
-try:
-    nude_detector = NudeDetector()
-    print("[OK] NSFW Content Moderation Detector initialized successfully.")
-except Exception as e:
-    print(f"[Warning] Failed to initialize NSFW detector: {e}")
-    nude_detector = None
+@app.on_event("startup")
+def startup_event():
+    global model, base_grad_model, nude_detector, class_names
+    
+    # 1. Seed database after Uvicorn starts
+    seed_database()
+    
+    # 2. Verify paths
+    if not MODEL_PATH.exists() or not LABELS_PATH.exists():
+        raise FileNotFoundError(
+            f"Critical Error: Ensure both '{MODEL_PATH.name}' and '{LABELS_PATH.name}' exist."
+        )
+        
+    # 3. Load Keras model
+    print("[Startup] Loading Keras model...")
+    model = load_model(MODEL_PATH, compile=False)
+    print("[Startup] Keras model loaded successfully.")
+    
+    # 4. Setup base grad model for Grad-CAM
+    base_model = None
+    for layer in model.layers:
+        if "mobilenet" in layer.name:
+            base_model = layer
+            break
+    if base_model:
+        base_grad_model = tf.keras.Model(
+            inputs=base_model.inputs,
+            outputs=[base_model.get_layer("out_relu").output, base_model.output]
+        )
+        print("[Startup] Grad-CAM Base model initialized successfully.")
+    else:
+        base_grad_model = None
+        print("[Startup WARNING] Could not find MobileNetV2 base model layer for Grad-CAM.")
+        
+    # 5. Load class labels
+    with open(LABELS_PATH, "r") as f:
+        class_names = [line.strip() for line in f.readlines()]
+        
+    # 6. Warm up the model
+    print("[Startup] Warming up Keras model...")
+    _dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
+    model.predict(_dummy, verbose=0)
+    print("[Startup OK] Model warmed up and ready.")
+    
+    # 7. Initialize NSFW detector
+    try:
+        print("[Startup] Initializing NSFW Content Moderation Detector...")
+        nude_detector = NudeDetector()
+        print("[Startup OK] NSFW Content Moderation Detector initialized successfully.")
+    except Exception as e:
+        print(f"[Startup Warning] Failed to initialize NSFW detector: {e}")
+        nude_detector = None
 
 
 def _is_image_inappropriate_sync(contents: bytes) -> bool:

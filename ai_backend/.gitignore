@@ -1,0 +1,20 @@
+# Python files
+.venv/
+__pycache__/
+.env
+
+# Datasets (Not needed for production hosting)
+ai_data/
+ai_data_normal_backup/
+
+# Training and management scripts (Not needed for running the API)
+train_model.py
+reduce_normal_dataset.py
+download_data.py
+
+# Local database files
+*.db
+*.db.bak
+
+# Local uploads folder
+uploads/
