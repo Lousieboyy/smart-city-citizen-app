@@ -473,7 +473,7 @@ def startup_event():
         
     # 3. Load TFLite model
     print("[Startup] Loading TFLite model...")
-    import tflite_runtime.interpreter as tflite
+    import ai_edge_litert.interpreter as tflite
     global interpreter, input_details, output_details
     interpreter = tflite.Interpreter(model_path=str(BASE_DIR / "model.tflite"))
     interpreter.allocate_tensors()

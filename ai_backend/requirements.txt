@@ -14,7 +14,7 @@ passlib[bcrypt]
 bcrypt==4.0.1
 
 # AI & Image Processing (Running in Lightweight TFLite mode)
-tflite-runtime
+ai-edge-litert
 opencv-python-headless
 pillow
 
