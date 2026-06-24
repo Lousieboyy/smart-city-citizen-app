@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 
-/// A reusable backdrop decorator that wraps our screens in a deep,
-/// premium space gradient (slate/indigo/dark purple). This gradient
-/// provides the ideal visual backing to show glassmorphic blur refractions.
+/// A reusable backdrop decorator that wraps our screens.
+/// Automatically resolves background color based on current theme brightness.
 class BackgroundDecorator extends StatelessWidget {
   final Widget child;
 
@@ -10,21 +9,13 @@ class BackgroundDecorator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: double.infinity,
       height: double.infinity,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF0F172A), // slate-900
-            Color(0xFF1E1B4B), // deep indigo
-            Color(0xFF2E1065), // midnight purple
-          ],
-        ),
-      ),
+      color: isDark ? const Color(0xFF000000) : const Color(0xFFFAFAF9),
       child: child,
     );
   }
 }
+

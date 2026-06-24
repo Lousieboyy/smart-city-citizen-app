@@ -17,6 +17,13 @@ class UserSession {
   String role     = 'citizen';
   /// JWT Bearer token issued at login — attached to every protected API request.
   String? token;
+  
+  // Customizable profile state variables
+  int?   avatarIndex;
+  String fullName = '';
+  String icNumber = '';
+  String phoneNumber = '';
+  String email = '';
 
   bool get isLoggedIn => userId != null;
 
@@ -25,17 +32,47 @@ class UserSession {
     required String name,
     required String userRole,
     String?         jwtToken,
+    int?            customAvatarIndex,
+    String?         userFullName,
+    String?         userIcNumber,
+    String?         userPhoneNumber,
+    String?         userEmail,
   }) {
-    userId   = id;
-    username = name;
-    role     = userRole;
-    token    = jwtToken;
+    userId      = id;
+    username    = name;
+    role        = userRole;
+    token       = jwtToken;
+    avatarIndex = customAvatarIndex;
+    fullName    = userFullName    ?? name;
+    icNumber    = userIcNumber    ?? '';
+    phoneNumber = userPhoneNumber ?? '';
+    email       = userEmail       ?? '';
   }
 
   void clear() {
-    userId   = null;
-    username = 'Citizen';
-    role     = 'citizen';
-    token    = null;
+    userId      = null;
+    username    = 'Citizen';
+    role        = 'citizen';
+    token       = null;
+    avatarIndex = null;
+    fullName    = '';
+    icNumber    = '';
+    phoneNumber = '';
+    email       = '';
   }
+}
+
+/// Helper to get a deterministic avatar path from a username or the user's custom selection.
+String getAvatarPath(String username) {
+  final customIndex = UserSession.instance.avatarIndex;
+  if (customIndex != null) {
+    return 'assets/avatars/avatar_$customIndex.png';
+  }
+  if (username.isEmpty) return 'assets/avatars/avatar_1.png';
+  int hash = 0;
+  for (int i = 0; i < username.length; i++) {
+    hash = 31 * hash + username.codeUnitAt(i);
+  }
+  final index = (hash.abs() % 18) + 1;
+  return 'assets/avatars/avatar_$index.png';
 }

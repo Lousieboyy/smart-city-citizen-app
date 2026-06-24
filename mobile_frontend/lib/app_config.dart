@@ -15,17 +15,9 @@ class AppConfig {
   static String get baseUrl {
     if (_envUrl.isNotEmpty) return _envUrl;
 
-    if (kIsWeb) {
-      return 'http://localhost:8000';
-    }
-    switch (defaultTargetPlatform) {
-      case TargetPlatform.android:
-        return 'http://10.0.2.2:8000'; // Loopback to host machine for Android emulator
-      case TargetPlatform.iOS:
-        return 'http://localhost:8000';
-      default:
-        return 'http://localhost:8000'; // Desktop (Windows/macOS/Linux)
-    }
+    // Default to the Localtunnel URL for development across all platforms.
+    // This allows physical devices and emulators to connect from any Wi-Fi network.
+    return 'https://dss-infra-reports.loca.lt';
   }
 }
 
@@ -41,6 +33,7 @@ class ReportStatus {
   static const String inProcess     = 'In Process';
   static const String inMaintenance = 'In Maintenance';
   static const String resolved      = 'Resolved';
+  static const String rejected      = 'Rejected';
 
   /// All statuses in workflow order.
   static const List<String> all = [
@@ -49,5 +42,6 @@ class ReportStatus {
     inProcess,
     inMaintenance,
     resolved,
+    rejected,
   ];
 }

@@ -10,8 +10,8 @@ mobile_frontend/.dart_tool/
 mobile_frontend/.flutter-plugins
 mobile_frontend/.flutter-plugins-dependencies
 
-# AI Models (Optional - if they are >100MB)
-*.h5
+# AI Models (Do not ignore keras_Model.h5 since it's required for backend deployment)
+# *.h5
 
 # OS Files
 .DS_Store

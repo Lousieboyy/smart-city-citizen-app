@@ -25,27 +25,21 @@ class GlassCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final br = borderRadius ?? BorderRadius.circular(16);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final br = borderRadius ?? BorderRadius.circular(8);
     return Container(
       margin: margin,
-      child: ClipRRect(
+      padding: padding ?? const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color ?? (isDark ? const Color(0xFF0F0F0F) : Colors.white), // Flat dark or white card background
         borderRadius: br,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20.0, sigmaY: 20.0), // Stronger frosted glass blur for maximum readability
-          child: Container(
-            padding: padding ?? const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: color ?? Colors.black.withOpacity(0.35), // Darker frosted glass base to contrast white text
-              borderRadius: br,
-              border: Border.all(
-                color: borderColor ?? Colors.white.withOpacity(0.1), // Subtly glowing glass border
-                width: borderWidth ?? 1.0,
-              ),
-            ),
-            child: child,
-          ),
+        border: Border.all(
+          color: borderColor ?? (isDark ? Colors.white24 : const Color(0xFFE7E5E4)), // Minimalist outline border
+          width: borderWidth ?? 1.5,
         ),
       ),
+      child: child,
     );
   }
 }
+

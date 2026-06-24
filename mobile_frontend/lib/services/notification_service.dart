@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'api_service.dart';
 import '../user_session.dart';
 
@@ -19,15 +20,7 @@ class StatusChange {
   });
 }
 
-/// NotificationService — lightweight polling-based in-app notification system.
-///
-/// WHY: FCM requires Firebase project setup, google-services.json and a push
-/// notification server — too much overhead for a local PSM project. Instead
-/// this service polls the backend every 60 seconds and emits a [StatusChange]
-/// whenever a report's status has changed since the last poll.
-///
-/// HOW: Call [start] after login and [stop] on logout.
-/// Subscribe to [changes] to receive real-time status updates in the UI.
+/// NotificationService — lightweight polling-based in-app & system notification system.
 class NotificationService {
   NotificationService._internal();
   static final NotificationService instance = NotificationService._internal();
@@ -39,9 +32,105 @@ class NotificationService {
   Timer?              _timer;
   Map<int, String>    _lastKnownStatuses = {};
 
+  final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
+  bool _localNotifInitialized = false;
+
+  /// Initialize local system notifications
+  Future<void> initializeLocalNotifications() async {
+    if (_localNotifInitialized) return;
+
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    const DarwinInitializationSettings initializationSettingsDarwin =
+        DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
+
+    const InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsDarwin,
+    );
+
+    try {
+      await _localNotifications.initialize(settings: initializationSettings);
+      
+      // Request permissions for Android 13+
+      await _localNotifications
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+
+      _localNotifInitialized = true;
+      debugPrint('[NotificationService] System notifications initialized successfully.');
+    } catch (e) {
+      debugPrint('[NotificationService] System notifications init error: $e');
+    }
+  }
+
+  /// Show a system-level alert with sound and vibration
+  Future<void> showLocalNotification({
+    required int id,
+    required String title,
+    required String body,
+  }) async {
+    await initializeLocalNotifications();
+
+    const AndroidNotificationDetails androidNotificationDetails =
+        AndroidNotificationDetails(
+      'smart_city_reports_channel',
+      'Smart City Reports Alerts',
+      channelDescription: 'Status updates and proximity alerts for smart city reports.',
+      importance: Importance.max,
+      priority: Priority.high,
+      ticker: 'ticker',
+      playSound: true,
+      enableVibration: true,
+    );
+
+    const DarwinNotificationDetails darwinNotificationDetails =
+        DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const NotificationDetails notificationDetails = NotificationDetails(
+      android: androidNotificationDetails,
+      iOS: darwinNotificationDetails,
+    );
+
+    try {
+      await _localNotifications.show(
+        id: id,
+        title: title,
+        body: body,
+        notificationDetails: notificationDetails,
+      );
+    } catch (e) {
+      debugPrint('[NotificationService] System notification show error: $e');
+    }
+  }
+
+  /// Fire a proximity alert system notification
+  Future<void> fireProximityAlert({
+    required int reportId,
+    required String title,
+    required String body,
+  }) async {
+    await showLocalNotification(
+      id: 100000 + reportId,
+      title: title,
+      body: body,
+    );
+  }
+
   /// Start polling every [intervalSeconds] seconds.
   void start({int intervalSeconds = 60}) {
     stop(); // cancel any previous timer first
+    initializeLocalNotifications(); // Ensure system notifications are set up
     _fetchAndCompare(); // immediate first check
     _timer = Timer.periodic(
       Duration(seconds: intervalSeconds),
@@ -83,12 +172,22 @@ class NotificationService {
           final prev = _lastKnownStatuses[id]!;
           if (prev != status) {
             final cat = (report['categories'] as String?) ?? 'Report';
+            
+            // Emit in-app event
             _controller.add(StatusChange(
               reportId:  id,
               category:  cat,
               oldStatus: prev,
               newStatus: status,
             ));
+            
+            // Trigger system-level notification
+            showLocalNotification(
+              id: id,
+              title: "Report Status Updated",
+              body: "Your report for '$cat' is now $status (was $prev).",
+            );
+            
             debugPrint('[NotificationService] Report #$id changed: $prev → $status');
           }
         }

@@ -52,22 +52,38 @@ class _LoginScreenState extends State<LoginScreen> {
         // FIX F-2 + F-4: Store ALL user fields — including role — in both
         // SharedPreferences (for persistence across app restarts) and the
         // in-memory UserSession singleton (for immediate access this session).
-        final int    userId   = data['user_id']  as int;
-        final String username = data['username'] as String;
-        final String role     = (data['role']    as String?) ?? 'citizen';
-        final String token    = (data['token']   as String?) ?? '';
+        final int    userId      = data['user_id']  as int;
+        final String username    = data['username'] as String;
+        final String role        = (data['role']    as String?) ?? 'citizen';
+        final String token       = (data['token']   as String?) ?? '';
+        final String fullName    = (data['fullName']    as String?) ?? username;
+        final String icNumber    = (data['icNumber']    as String?) ?? '';
+        final String phoneNumber = (data['phoneNumber'] as String?) ?? '';
+        final String email       = (data['email']       as String?) ?? '';
 
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setInt   ('user_id',  userId);
-        await prefs.setString('username', username);
-        await prefs.setString('role',     role);
-        await prefs.setString('token',    token); // JWT token
+        await prefs.setInt   ('user_id',       userId);
+        await prefs.setString('username',      username);
+        await prefs.setString('role',          role);
+        await prefs.setString('token',         token); // JWT token
+        await prefs.setString('full_name',     fullName);
+        await prefs.setString('ic_number',     icNumber);
+        await prefs.setString('phone_number',  phoneNumber);
+        await prefs.setString('email',         email);
+
+        // Fetch custom avatar index if it exists in SharedPreferences
+        final int? customAvatarIndex = prefs.getInt('avatar_index');
 
         UserSession.instance.populate(
-          id:       userId,
-          name:     username,
-          userRole: role,
-          jwtToken: token,
+          id:                userId,
+          name:              username,
+          userRole:          role,
+          jwtToken:          token,
+          customAvatarIndex: customAvatarIndex,
+          userFullName:      fullName,
+          userIcNumber:      icNumber,
+          userPhoneNumber:   phoneNumber,
+          userEmail:         email,
         );
 
         if (!mounted) return;
@@ -100,6 +116,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       body: BackgroundDecorator(
         child: SafeArea(
@@ -116,51 +133,41 @@ class _LoginScreenState extends State<LoginScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       const SizedBox(height: 12),
-                      // Elegant Logo Header
+                      // Elegant Vector Logo Header
                       Center(
                         child: Container(
                           width: 80,
                           height: 80,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF6366F1).withOpacity(0.4),
-                                blurRadius: 20,
-                                spreadRadius: 2,
-                              ),
-                            ],
+                            color: isDark ? Colors.black : const Color(0xFFF5F5F4),
+                            border: Border.all(color: isDark ? Colors.white : const Color(0xFFD6D3D1), width: 2.0),
                           ),
-                          child: const Icon(
+                          child: Icon(
                             Icons.query_stats_rounded,
                             size: 40,
-                            color: Colors.white,
+                            color: isDark ? Colors.white : const Color(0xFF0D9488),
                           ),
                         ),
                       ),
                       const SizedBox(height: 24),
-                      const Text(
+                      Text(
                         "DECISION SUPPORT",
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w900,
-                          color: Colors.white,
+                          color: isDark ? Colors.white : const Color(0xFF1C1917),
                           letterSpacing: 2.0,
                         ),
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 4),
-                      const Text(
+                      Text(
                         "REPORTING SYSTEM",
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
-                          color: Color(0xFFA5B4FC),
+                          color: isDark ? Colors.grey : const Color(0xFF78716C),
                           letterSpacing: 4.0,
                         ),
                         textAlign: TextAlign.center,
@@ -172,33 +179,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         controller: _usernameController,
                         textInputAction: TextInputAction.next,
                         keyboardType: TextInputType.text,
-                        style: const TextStyle(color: Colors.white, fontSize: 15),
-                        decoration: InputDecoration(
+                        style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1C1917), fontSize: 15),
+                        decoration: const InputDecoration(
                           labelText: "Username",
-                          labelStyle: const TextStyle(color: Colors.white70, fontSize: 14),
-                          floatingLabelStyle: const TextStyle(color: Color(0xFFA5B4FC), fontSize: 14),
                           hintText: "Enter username",
-                          hintStyle: const TextStyle(color: Colors.white30, fontSize: 14),
-                          prefixIcon: const Icon(Icons.person_outline_rounded, color: Color(0xFFA5B4FC)),
-                          filled: true,
-                          fillColor: Colors.black.withOpacity(0.2),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: BorderSide(color: Colors.white.withOpacity(0.08), width: 1.0),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: Color(0xFFA5B4FC), width: 1.8),
-                          ),
-                          errorBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: Colors.redAccent, width: 1.0),
-                          ),
-                          focusedErrorBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: Colors.redAccent, width: 1.8),
-                          ),
+                          prefixIcon: Icon(Icons.person_outline_rounded),
                         ),
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
@@ -215,43 +200,21 @@ class _LoginScreenState extends State<LoginScreen> {
                         obscureText: _obscurePassword,
                         textInputAction: TextInputAction.done,
                         onFieldSubmitted: (_) => _handleLogin(),
-                        style: const TextStyle(color: Colors.white, fontSize: 15),
+                        style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1C1917), fontSize: 15),
                         decoration: InputDecoration(
                           labelText: "Password",
-                          labelStyle: const TextStyle(color: Colors.white70, fontSize: 14),
-                          floatingLabelStyle: const TextStyle(color: Color(0xFFA5B4FC), fontSize: 14),
                           hintText: "Enter password",
-                          hintStyle: const TextStyle(color: Colors.white30, fontSize: 14),
-                          prefixIcon: const Icon(Icons.lock_outline_rounded, color: Color(0xFFA5B4FC)),
+                          prefixIcon: const Icon(Icons.lock_outline_rounded),
                           suffixIcon: IconButton(
                             icon: Icon(
                               _obscurePassword
                                   ? Icons.visibility_off_outlined
                                   : Icons.visibility_outlined,
-                              color: Colors.white60,
+                              color: isDark ? Colors.white60 : const Color(0xFF78716C),
                               size: 20,
                             ),
                             onPressed: () =>
                                 setState(() => _obscurePassword = !_obscurePassword),
-                          ),
-                          filled: true,
-                          fillColor: Colors.black.withOpacity(0.2),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: BorderSide(color: Colors.white.withOpacity(0.08), width: 1.0),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: Color(0xFFA5B4FC), width: 1.8),
-                          ),
-                          errorBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: Colors.redAccent, width: 1.0),
-                          ),
-                          focusedErrorBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: Colors.redAccent, width: 1.8),
                           ),
                         ),
                         validator: (value) {
@@ -264,39 +227,23 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 32),
 
                       // Login button
-                      Container(
+                      SizedBox(
                         height: 52,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                          ),
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF6366F1).withOpacity(0.4),
-                              blurRadius: 16,
-                              offset: const Offset(0, 4),
-                            )
-                          ],
-                        ),
                         child: ElevatedButton(
                           onPressed: _isLoading ? null : _handleLogin,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.transparent,
-                            shadowColor: Colors.transparent,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16)),
+                            backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
+                            foregroundColor: isDark ? Colors.black : Colors.white,
                           ),
                           child: _isLoading
-                              ? const SizedBox(
+                              ? SizedBox(
                                   width: 22,
                                   height: 22,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 2.5, color: Colors.white),
+                                      strokeWidth: 2.5, color: isDark ? Colors.black : Colors.white),
                                 )
                               : const Text("SIGN IN",
                                   style: TextStyle(
-                                      color: Colors.white,
                                       fontWeight: FontWeight.bold,
                                       letterSpacing: 1.5,
                                       fontSize: 16)),
@@ -310,7 +257,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           MaterialPageRoute(builder: (_) => const SignupScreen()),
                         ),
                         style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFFA5B4FC),
+                          foregroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
                           padding: const EdgeInsets.symmetric(vertical: 8),
                         ),
                         child: const Text(

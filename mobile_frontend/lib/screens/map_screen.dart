@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui';
@@ -10,6 +11,7 @@ import '../services/api_service.dart';
 import 'package:latlong2/latlong.dart';
 import '../widgets/glass_card.dart';
 import 'report_detail_screen.dart';
+import '../services/notification_service.dart';
 
 class MapViewScreen extends StatefulWidget {
   const MapViewScreen({super.key});
@@ -40,7 +42,8 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
   bool _showLegend = false;
 
   // ── Map style state ───────────────────────────────────────────────────
-  String _mapStyle = 'Muted Light';
+  String _mapStyle = 'Standard';
+  Brightness? _lastBrightness;
 
   // ── Category filter ───────────────────────────────────────────────────
   final List<String> _categories = ["All", "Road", "Lighting", "Waste", "Drainage"];
@@ -50,12 +53,27 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
   List<_IssueMarker> _issues = [];
   bool _showHeatmap = false;
 
+  // ── Cache for optimized map markers ──────────────────────────────────
+  List<_IssueMarker> _cachedMarkers = [];
+  double _lastCachedZoom = 0.0;
+  int _lastCachedIssuesCount = 0;
+  int _lastSelectedCategory = 0;
+  bool _lastShowResolvedOnly = false;
+  String _lastStatusFilter = 'All';
+
   // ── Resolved & Status filter ──────────────────────────────────────────
   bool _showResolvedOnly = false;
   String _statusFilter = 'All';
   final List<String> _statusOptions = [
     'All', 'Pending', 'In Review', 'In Process', 'In Maintenance', 'Resolved',
   ];
+
+  // ── Proximity Alert state ──────────────────────────────────────────────
+  StreamSubscription<Position>? _positionStreamSub;
+  final Set<String> _alertedReportIds = {};
+  _IssueMarker? _activeProximityAlertIssue;
+  double? _activeProximityDistance;
+  Timer? _proximityDismissTimer;
 
   // ── Lifecycle ─────────────────────────────────────────────────────────
   @override
@@ -70,12 +88,13 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
   @override
   void dispose() {
+    _positionStreamSub?.cancel();
+    _proximityDismissTimer?.cancel();
     _mapController.dispose();
     _pulseController.dispose();
     super.dispose();
   }
 
-  // ── GPS Logic ─────────────────────────────────────────────────────────
   Future<void> _requestLocationAndLoad() async {
     if (!mounted) return;
     setState(() {
@@ -84,41 +103,75 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     });
 
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (!mounted) return;
-        setState(() {
-          _locationError = 'Location services are disabled.\nPlease enable GPS in device settings.';
-          _locationLoading = false;
-        });
-        return;
-      }
+      bool useRealGPS = false;
+      LocationPermission permission = LocationPermission.denied;
 
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          if (!mounted) return;
-          setState(() {
-            _locationError = 'Location permission denied.\nPlease allow location access.';
-            _locationLoading = false;
-          });
-          return;
+      try {
+        bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (serviceEnabled) {
+          permission = await Geolocator.checkPermission();
+          if (permission == LocationPermission.denied) {
+            permission = await Geolocator.requestPermission();
+          }
+          if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+            useRealGPS = true;
+          }
         }
-      }
-      if (permission == LocationPermission.deniedForever) {
-        if (!mounted) return;
-        setState(() {
-          _locationError =
-              'Location permission permanently denied.\nOpen app settings to grant access.';
-          _locationLoading = false;
-        });
-        return;
+      } catch (e) {
+        debugPrint("Geolocator check failed, falling back to mock: $e");
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-      );
+      Position position;
+      if (useRealGPS) {
+        try {
+          // Attempt instant load from cache
+          final lastKnown = await Geolocator.getLastKnownPosition();
+          if (lastKnown != null) {
+            position = lastKnown;
+          } else {
+            position = await Geolocator.getCurrentPosition(
+              desiredAccuracy: LocationAccuracy.high,
+              timeLimit: const Duration(seconds: 3),
+            );
+          }
+        } catch (e) {
+          debugPrint("High accuracy GPS timed out, trying low accuracy: $e");
+          try {
+            position = await Geolocator.getCurrentPosition(
+              desiredAccuracy: LocationAccuracy.low,
+              timeLimit: const Duration(seconds: 2),
+            );
+          } catch (_) {
+            // Final fallback to Melaka Center
+            position = Position(
+              latitude: 2.1896,
+              longitude: 102.2501,
+              timestamp: DateTime.now(),
+              accuracy: 0.0,
+              altitude: 0.0,
+              heading: 0.0,
+              speed: 0.0,
+              speedAccuracy: 0.0,
+              altitudeAccuracy: 0.0,
+              headingAccuracy: 0.0,
+            );
+          }
+        }
+      } else {
+        // Fallback to default Melaka center (2.1896, 102.2501)
+        position = Position(
+          latitude: 2.1896,
+          longitude: 102.2501,
+          timestamp: DateTime.now(),
+          accuracy: 0.0,
+          altitude: 0.0,
+          heading: 0.0,
+          speed: 0.0,
+          speedAccuracy: 0.0,
+          altitudeAccuracy: 0.0,
+          headingAccuracy: 0.0,
+        );
+      }
 
       if (!mounted) return;
       final userLatLng = LatLng(position.latitude, position.longitude);
@@ -137,6 +190,31 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
       await _fetchReports();
 
+      // Run initial check for proximity
+      _checkProximityAlerts(position);
+
+      if (useRealGPS) {
+        // Setup real-time position stream subscription
+        _positionStreamSub?.cancel();
+        _positionStreamSub = Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 5, // Check updates every 5 meters
+          ),
+        ).listen(
+          (Position pos) {
+            if (!mounted) return;
+            setState(() {
+              _currentPosition = pos;
+            });
+            _checkProximityAlerts(pos);
+          },
+          onError: (err) {
+            debugPrint("GPS Stream error: $err");
+          },
+        );
+      }
+
       if (!mounted) return;
       setState(() {
         _locationLoading = false;
@@ -149,6 +227,216 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
         _locationLoading = false;
       });
     }
+  }
+
+  void _checkProximityAlerts(Position position) {
+    if (_issues.isEmpty) return;
+
+    // Filter to candidate unresolved issues that have not been alerted yet
+    final candidates = _issues.where((issue) {
+      final status = issue.rawData['status'] ?? 'Pending';
+      final isResolved = status == 'Resolved';
+      final alreadyAlerted = _alertedReportIds.contains(issue.id);
+      return !isResolved && !alreadyAlerted;
+    }).toList();
+
+    if (candidates.isEmpty) return;
+
+    // Calculate distances
+    final List<MapEntry<_IssueMarker, double>> distanceList = [];
+    for (var issue in candidates) {
+      final double distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        issue.position.latitude,
+        issue.position.longitude,
+      );
+      distanceList.add(MapEntry(issue, distance));
+    }
+
+    // Sort by distance ascending
+    distanceList.sort((a, b) => a.value.compareTo(b.value));
+
+    // Get closest one
+    final closest = distanceList.first;
+    if (closest.value <= 50.0) {
+      final issue = closest.key;
+      final distance = closest.value;
+
+      _alertedReportIds.add(issue.id);
+      
+      setState(() {
+        _activeProximityAlertIssue = issue;
+        _activeProximityDistance = distance;
+      });
+
+      // Fire local system notification (rings & buzzes the phone)
+      NotificationService.instance.fireProximityAlert(
+        reportId: int.tryParse(issue.id) ?? 0,
+        title: "PROXIMITY ALERT",
+        body: "You are ${distance.toStringAsFixed(0)}m away from an active '${issue.label}' issue.",
+      );
+
+      // Auto-dismiss after 8 seconds
+      _proximityDismissTimer?.cancel();
+      _proximityDismissTimer = Timer(const Duration(seconds: 8), () {
+        if (mounted) {
+          setState(() {
+            _activeProximityAlertIssue = null;
+            _activeProximityDistance = null;
+          });
+        }
+      });
+    }
+  }
+
+  Widget _buildProximityAlertBanner(bool isDark) {
+    final issue = _activeProximityAlertIssue;
+    final dist = _activeProximityDistance;
+    if (issue == null) return const SizedBox.shrink();
+
+    final cat = issue.label;
+    final distanceText = dist != null ? '${dist.toStringAsFixed(0)}m' : 'nearby';
+
+    return GlassCard(
+      color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.9) : Colors.white.withOpacity(0.95),
+      borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
+      borderWidth: 1.5,
+      borderRadius: BorderRadius.circular(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          // Glowing Warning Icon
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEF4444).withOpacity(0.1),
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.25), width: 1),
+            ),
+            child: const Icon(
+              Icons.warning_amber_rounded,
+              color: Color(0xFFEF4444),
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Issue Info
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'PROXIMITY ALERT',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.2,
+                        color: Color(0xFFEF4444),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      width: 5,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.white24 : const Color(0xFFD6D3D1),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      distanceText,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : const Color(0xFF1C1917),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '$cat Detected',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : const Color(0xFF1C1917),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (issue.rawData['description'] != null && issue.rawData['description'].toString().isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    issue.rawData['description'],
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Action Buttons: View Details & Dismiss
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton(
+                style: TextButton.styleFrom(
+                  backgroundColor: const Color(0xFFEF4444).withOpacity(0.1),
+                  foregroundColor: const Color(0xFFEF4444),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    side: BorderSide(color: const Color(0xFFEF4444).withOpacity(0.25)),
+                  ),
+                ),
+                onPressed: () {
+                  setState(() {
+                    _activeProximityAlertIssue = null;
+                    _activeProximityDistance = null;
+                  });
+                  _proximityDismissTimer?.cancel();
+                  // Move map to the issue position and zoom in
+                  _mapController.move(issue.position, 17.0);
+                  // Open issue details sheet
+                  _showMarkerDetails(issue);
+                },
+                child: const Text(
+                  'View',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(width: 6),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () {
+                  setState(() {
+                    _activeProximityAlertIssue = null;
+                    _activeProximityDistance = null;
+                  });
+                  _proximityDismissTimer?.cancel();
+                },
+                icon: Icon(
+                  Icons.close_rounded,
+                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+                  size: 20,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _fetchReports() async {
@@ -167,7 +455,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
             if (status == 'Resolved') {
               priority = 'Resolved';
-              mapColor = const Color(0xFF2196F3); // Blue for resolved
+              mapColor = const Color(0xFF10B981); // Emerald green for resolved
             } else if (cat.contains('Damage') || cat.contains('Drainage') || cat.contains('Tree')) {
               priority = 'High';
               mapColor = Colors.red;
@@ -217,23 +505,32 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     return filtered;
   }
 
-  /// Groups overlapping pins into clover-shaped clusters when zoomed out,
-  /// designating a leader pin to render the clover and translating member pins to converge.
   List<_IssueMarker> _getAdjustedMarkers() {
     final original = _filteredIssues;
     if (original.isEmpty) return [];
+
+    final bool zoomChanged = (_mapZoom - _lastCachedZoom).abs() > 0.15;
+    final bool dataChanged = original.length != _lastCachedIssuesCount ||
+        _selectedCategory != _lastSelectedCategory ||
+        _showResolvedOnly != _lastShowResolvedOnly ||
+        _statusFilter != _lastStatusFilter;
+
+    if (_cachedMarkers.isNotEmpty && !zoomChanged && !dataChanged) {
+      return _cachedMarkers;
+    }
 
     final List<_IssueMarker> adjusted = [];
     final int n = original.length;
     final List<bool> grouped = List.filled(n, false);
 
     // Calculate scale factor using degrees-to-pixel approximation at current zoom:
-    // scale = 0.71 * 2^Z
+    // scale = 0.71 * math.pow(2.0, Z)
     final double scale = 0.71 * math.pow(2.0, _mapZoom);
     
     // Clustering is enabled when zoom is less than 16.0
     final bool enableClustering = _mapZoom < 16.0;
-    const double thresholdPixels = 50.0; // Overlap grouping threshold in screen pixels
+    const double clusterThresholdPixels = 50.0; // Overlap grouping threshold for clover clustering
+    const double spiderfyThresholdPixels = 24.0; // Overlap threshold for separating individual pins
 
     for (int i = 0; i < n; i++) {
       if (grouped[i]) continue;
@@ -243,6 +540,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
       final LatLng pStart = original[i].position;
 
       if (enableClustering) {
+        // ── Zoom < 16: Standard clover-shaped clustering ──
         for (int j = i + 1; j < n; j++) {
           if (grouped[j]) continue;
           final LatLng pCheck = original[j].position;
@@ -252,77 +550,159 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           final double dy = (pCheck.latitude - pStart.latitude) * scale;
           final double dist = math.sqrt(dx * dx + dy * dy);
 
-          if (dist < thresholdPixels) {
+          if (dist < clusterThresholdPixels) {
             groupIndices.add(j);
             grouped[j] = true;
           }
         }
-      }
 
-      final int groupSize = groupIndices.length;
-      if (groupSize == 1) {
-        // Keep original pin location with zero translation offset
-        final originalMarker = original[i];
-        adjusted.add(_IssueMarker(
-          id: originalMarker.id,
-          label: originalMarker.label,
-          position: originalMarker.position,
-          priority: originalMarker.priority,
-          color: originalMarker.color,
-          rawData: originalMarker.rawData,
-          translationOffset: Offset.zero,
-          isClusterLeader: false,
-          isClusterMember: false,
-          clusterSize: 1,
-        ));
-      } else {
-        // Find center coordinate of the overlapping group
-        double sumLat = 0.0;
-        double sumLng = 0.0;
-        for (int idx in groupIndices) {
-          sumLat += original[idx].position.latitude;
-          sumLng += original[idx].position.longitude;
-        }
-        final double centerLat = sumLat / groupSize;
-        final double centerLng = sumLng / groupSize;
-        final LatLng centerLatLng = LatLng(centerLat, centerLng);
-
-        // Find leader index (prioritize High > Medium > others)
-        int leaderIdx = groupIndices[0];
-        for (int idx in groupIndices) {
-          final priority = original[idx].priority;
-          final currentPriority = original[leaderIdx].priority;
-          if (priority == 'High' && currentPriority != 'High') {
-            leaderIdx = idx;
-          } else if (priority == 'Medium' && currentPriority != 'High' && currentPriority != 'Medium') {
-            leaderIdx = idx;
-          }
-        }
-
-        for (int idx in groupIndices) {
-          final isLeader = (idx == leaderIdx);
-          final originalMarker = original[idx];
-          
-          // Calculate screen pixel translation from the original true location to the group center:
-          final double transX = (centerLng - originalMarker.position.longitude) * scale;
-          final double transY = (originalMarker.position.latitude - centerLat) * scale;
-
+        final int groupSize = groupIndices.length;
+        if (groupSize == 1) {
+          final originalMarker = original[i];
           adjusted.add(_IssueMarker(
             id: originalMarker.id,
             label: originalMarker.label,
-            position: originalMarker.position, // Maintain original position for map placement
+            position: originalMarker.position,
             priority: originalMarker.priority,
             color: originalMarker.color,
             rawData: originalMarker.rawData,
-            translationOffset: Offset(transX, transY),
-            isClusterLeader: isLeader,
-            isClusterMember: !isLeader,
-            clusterSize: groupSize,
-            clusterCenter: centerLatLng,
+            translationOffset: Offset.zero,
+            isClusterLeader: false,
+            isClusterMember: false,
+            clusterSize: 1,
           ));
+        } else {
+          // Find center coordinate of the overlapping group
+          double sumLat = 0.0;
+          double sumLng = 0.0;
+          for (int idx in groupIndices) {
+            sumLat += original[idx].position.latitude;
+            sumLng += original[idx].position.longitude;
+          }
+          final double centerLat = sumLat / groupSize;
+          final double centerLng = sumLng / groupSize;
+          final LatLng centerLatLng = LatLng(centerLat, centerLng);
+
+          // Find leader index (prioritize High > Medium > others)
+          int leaderIdx = groupIndices[0];
+          for (int idx in groupIndices) {
+            final priority = original[idx].priority;
+            final currentPriority = original[leaderIdx].priority;
+            if (priority == 'High' && currentPriority != 'High') {
+              leaderIdx = idx;
+            } else if (priority == 'Medium' && currentPriority != 'High' && currentPriority != 'Medium') {
+              leaderIdx = idx;
+            }
+          }
+
+          for (int idx in groupIndices) {
+            final isLeader = (idx == leaderIdx);
+            final originalMarker = original[idx];
+            
+            // Calculate screen pixel translation from the original true location to the group center:
+            final double transX = (centerLng - originalMarker.position.longitude) * scale;
+            final double transY = (originalMarker.position.latitude - centerLat) * scale;
+
+            adjusted.add(_IssueMarker(
+              id: originalMarker.id,
+              label: originalMarker.label,
+              position: originalMarker.position, // Maintain original position for map placement
+              priority: originalMarker.priority,
+              color: originalMarker.color,
+              rawData: originalMarker.rawData,
+              translationOffset: Offset(transX, transY),
+              isClusterLeader: isLeader,
+              isClusterMember: !isLeader,
+              clusterSize: groupSize,
+              clusterCenter: centerLatLng,
+            ));
+          }
+        }
+      } else {
+        // ── Zoom >= 16: Spiderfy / Separate Overlapping Pins in a Circle ──
+        for (int j = i + 1; j < n; j++) {
+          if (grouped[j]) continue;
+          final LatLng pCheck = original[j].position;
+
+          // Calculate approximate distance in pixels
+          final double dx = (pCheck.longitude - pStart.longitude) * scale;
+          final double dy = (pCheck.latitude - pStart.latitude) * scale;
+          final double dist = math.sqrt(dx * dx + dy * dy);
+
+          if (dist < spiderfyThresholdPixels) {
+            groupIndices.add(j);
+            grouped[j] = true;
+          }
+        }
+
+        final int groupSize = groupIndices.length;
+        if (groupSize == 1) {
+          final originalMarker = original[i];
+          adjusted.add(_IssueMarker(
+            id: originalMarker.id,
+            label: originalMarker.label,
+            position: originalMarker.position,
+            priority: originalMarker.priority,
+            color: originalMarker.color,
+            rawData: originalMarker.rawData,
+            translationOffset: Offset.zero,
+            isClusterLeader: false,
+            isClusterMember: false,
+            clusterSize: 1,
+          ));
+        } else {
+          // Find center coordinate of the overlapping group
+          double sumLat = 0.0;
+          double sumLng = 0.0;
+          for (int idx in groupIndices) {
+            sumLat += original[idx].position.latitude;
+            sumLng += original[idx].position.longitude;
+          }
+          final double centerLat = sumLat / groupSize;
+          final double centerLng = sumLng / groupSize;
+
+          // Radius of the circle in screen pixels.
+          // Slightly expand radius for larger groups of overlapping pins.
+          final double radius = 18.0 + (groupSize * 2.0).clamp(0.0, 10.0);
+
+          for (int k = 0; k < groupSize; k++) {
+            final idx = groupIndices[k];
+            final originalMarker = original[idx];
+            
+            // Distribute points evenly along a circle
+            final double angle = k * (2.0 * math.pi / groupSize);
+            
+            // Target offset from center of group
+            final double spiderX = radius * math.cos(angle);
+            final double spiderY = radius * math.sin(angle);
+
+            // Screen translation from original marker coordinate to its spiderfied position
+            final double transX = ((centerLng - originalMarker.position.longitude) * scale) + spiderX;
+            final double transY = ((originalMarker.position.latitude - centerLat) * scale) - spiderY;
+
+            adjusted.add(_IssueMarker(
+              id: originalMarker.id,
+              label: originalMarker.label,
+              position: originalMarker.position, // Keep original coordinate for map layout
+              priority: originalMarker.priority,
+              color: originalMarker.color,
+              rawData: originalMarker.rawData,
+              translationOffset: Offset(transX, transY),
+              isClusterLeader: false,
+              isClusterMember: false,
+              clusterSize: 1, // Draw all of them as separate, individual pins
+            ));
+          }
         }
       }
     }
+
+    _cachedMarkers = adjusted;
+    _lastCachedZoom = _mapZoom;
+    _lastCachedIssuesCount = original.length;
+    _lastSelectedCategory = _selectedCategory;
+    _lastShowResolvedOnly = _showResolvedOnly;
+    _lastStatusFilter = _statusFilter;
 
     return adjusted;
   }
@@ -345,8 +725,26 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     }
   }
 
-  /// Builds a single high-contrast capsule pin marker representation styled like the navbar (dark frosted glass + indigo outline).
-  Widget _buildSinglePin(_IssueMarker issue) {
+  /// Returns a neon accent color based on report category for pin borders/glow in dark mode
+  Color _getCategoryNeonColor(String category) {
+    final cat = category.toLowerCase();
+    if (cat.contains('road') || cat.contains('damage')) {
+      return const Color(0xFFFF6B35); // Neon orange — road/damage
+    } else if (cat.contains('light') || cat.contains('lamp')) {
+      return const Color(0xFFFFE135); // Neon yellow — lighting
+    } else if (cat.contains('waste') || cat.contains('trash') || cat.contains('rubbish')) {
+      return const Color(0xFF39FF14); // Neon green — waste
+    } else if (cat.contains('drain') || cat.contains('water')) {
+      return const Color(0xFF00CFFF); // Neon cyan — drainage/water
+    } else if (cat.contains('noise')) {
+      return const Color(0xFFDA00FF); // Neon purple — noise
+    } else {
+      return const Color(0xFFFF2D78); // Neon pink — other/general
+    }
+  }
+
+  /// Builds a single high-contrast capsule pin marker representation styled like the navbar.
+  Widget _buildSinglePin(_IssueMarker issue, bool isDark) {
     final status = (issue.rawData['status'] ?? 'Pending').toString();
     final int upvotes = issue.rawData['upvotes'] is int
         ? issue.rawData['upvotes']
@@ -374,7 +772,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
         ? const Color(0xFFF59E0B) // Amber gold for high votes
         : upvotes >= 2
             ? const Color(0xFFEC4899) // Hot pink for trending votes
-            : const Color(0xFFA5B4FC); // Standard Indigo
+            : (isDark ? Colors.black : Colors.white); // Standard Neon
 
     return AnimatedBuilder(
       animation: _pulseController,
@@ -436,7 +834,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           width: baseWidth,
                           height: baseHeight,
                           decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.85),
+                            color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
                             borderRadius: const BorderRadius.only(
                               topLeft: Radius.circular(12),
                               topRight: Radius.circular(12),
@@ -444,14 +842,18 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                               bottomRight: Radius.zero,
                             ),
                             border: Border.all(
-                              color: glowColor,
+                              color: isDark
+                                  ? _getCategoryNeonColor(issue.label)
+                                  : const Color(0xFF1C1917),
                               width: 1.5 + (upvotes * 0.4).clamp(0.0, 2.5),
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: glowColor.withOpacity(0.35 + (upvotes * 0.05).clamp(0.0, 0.4)),
-                                blurRadius: 5 + upvotes * 3.0,
-                                spreadRadius: 0.5 + upvotes * 0.5,
+                                color: isDark
+                                    ? _getCategoryNeonColor(issue.label).withOpacity(0.55)
+                                    : const Color(0xFF1C1917).withOpacity(0.2),
+                                blurRadius: 8 + upvotes * 3.0,
+                                spreadRadius: 1.5 + upvotes * 0.5,
                               ),
                             ],
                           ),
@@ -464,7 +866,9 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                             angle: -math.pi / 4,
                             child: Icon(
                               _getCategoryIcon(issue.label),
-                              color: Colors.white,
+                              color: isDark
+                                  ? _getCategoryNeonColor(issue.label)
+                                  : const Color(0xFF1C1917),
                               size: 13 * sizeMultiplier,
                             ),
                           ),
@@ -480,7 +884,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           decoration: BoxDecoration(
                             color: statusColor.withOpacity(statusOpacity),
                             shape: BoxShape.circle,
-                            border: Border.all(color: Colors.black, width: 1.0),
+                            border: Border.all(color: isDark ? Colors.white : Colors.black, width: 1.0),
                             boxShadow: [
                               BoxShadow(
                                 color: statusColor.withOpacity(0.5),
@@ -491,7 +895,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           ),
                         ),
                       ),
-                      // 4. Upvotes Count Pill Badge (displayed on bottom right of the pin if upvotes > 0)
+                      // 4. Urgent Flags Count Pill Badge (displayed on bottom right of the pin if upvotes > 0)
                       if (upvotes > 0)
                         Positioned(
                           bottom: -4,
@@ -501,7 +905,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                             decoration: BoxDecoration(
                               color: glowColor,
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.black, width: 1.0),
+                              border: Border.all(color: isDark ? Colors.white : Colors.black, width: 1.0),
                               boxShadow: [
                                 BoxShadow(
                                   color: glowColor.withOpacity(0.4),
@@ -511,9 +915,9 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                               ],
                             ),
                             child: Text(
-                              "+$upvotes",
-                              style: const TextStyle(
-                                color: Colors.white,
+                              "⚠$upvotes",
+                              style: TextStyle(
+                                color: (glowColor == Colors.white) ? const Color(0xFF1C1917) : Colors.white,
                                 fontSize: 8,
                                 fontWeight: FontWeight.w900,
                               ),
@@ -533,7 +937,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
   /// Builds a unified clover/cloud cluster representation consisting of
   /// three overlapping circles styled like the navbar with count badge.
-  Widget _buildCloverCluster(_IssueMarker issue) {
+  Widget _buildCloverCluster(_IssueMarker issue, bool isDark) {
     return SizedBox(
       key: ValueKey('clover_${issue.id}'),
       width: 56,
@@ -545,19 +949,19 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           Positioned(
             left: 16,
             top: 4,
-            child: _buildClusterCircle(issue),
+            child: _buildClusterCircle(issue, isDark),
           ),
           // 2. Bottom-left circle
           Positioned(
             left: 6,
             top: 18,
-            child: _buildClusterCircle(issue),
+            child: _buildClusterCircle(issue, isDark),
           ),
           // 3. Bottom-right circle
           Positioned(
             left: 26,
             top: 18,
-            child: _buildClusterCircle(issue),
+            child: _buildClusterCircle(issue, isDark),
           ),
           // 4. Red badge on top right
           Positioned(
@@ -599,7 +1003,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildClusterCircle(_IssueMarker issue) {
+  Widget _buildClusterCircle(_IssueMarker issue, bool isDark) {
     return Stack(
       children: [
         Transform.rotate(
@@ -608,17 +1012,17 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
             width: 24,
             height: 24,
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.85), // Dark glassmorphic core matching single pins
+              color: isDark ? const Color(0xFF0F0F0F) : Colors.white, // Light/Dark core
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(12),
                 topRight: Radius.circular(12),
                 bottomLeft: Radius.circular(12),
                 bottomRight: Radius.zero, // Pointy tip pointing bottom-right (down when rotated)
               ),
-              border: Border.all(color: const Color(0xFFA5B4FC), width: 1.5), // Glowing indigo border
+              border: Border.all(color: isDark ? Colors.white : const Color(0xFF1C1917), width: 1.5), // Slate border
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFA5B4FC).withOpacity(0.25),
+                  color: isDark ? Colors.black.withOpacity(0.4) : const Color(0xFF1C1917).withOpacity(0.2),
                   blurRadius: 4,
                   offset: const Offset(0, 1.0),
                 ),
@@ -632,7 +1036,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
               angle: -math.pi / 4, // Counter-rotate icon back upright
               child: Icon(
                 _getCategoryIcon(issue.label),
-                color: Colors.white,
+                color: isDark ? Colors.white : const Color(0xFF1C1917),
                 size: 12,
               ),
             ),
@@ -659,7 +1063,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     }
   }
 
-  Widget _buildHorizontalProgress(String status) {
+  Widget _buildHorizontalProgress(String status, bool isDark) {
     final currentStep = _getStatusStep(status);
     final steps = ['Submitted', 'Reviewed', 'Assigned', 'Maintenance', 'Resolved'];
 
@@ -667,17 +1071,17 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
+        color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'REPORT PROGRESS',
             style: TextStyle(
-              color: Color(0xFFCBD5E1),
+              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
               fontSize: 10,
               fontWeight: FontWeight.bold,
               letterSpacing: 1.0,
@@ -688,15 +1092,15 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: List.generate(5, (index) {
               final bool isDone = index <= currentStep;
-              final bool isActive = index == currentStep && status != 'Resolved';
+              final bool isActive = index == currentStep;
               
               Color stepColor;
               if (isActive) {
-                stepColor = const Color(0xFFA5B4FC); // Glowing navbar indigo
+                stepColor = const Color(0xFF10B981); // Emerald green — matches the bar
               } else if (isDone) {
                 stepColor = const Color(0xFF10B981); // Emerald green for completed
               } else {
-                stepColor = Colors.white.withOpacity(0.2); // Grey for future
+                stepColor = isDark ? Colors.white38 : const Color(0xFFD6D3D1); // Grey for future
               }
 
               return Expanded(
@@ -711,7 +1115,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                         shape: BoxShape.circle,
                         border: isActive 
                             ? Border.all(color: stepColor, width: 3.5)
-                            : Border.all(color: Colors.white.withOpacity(0.15), width: 1.0),
+                            : Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), width: 1.0),
                         boxShadow: [
                           if (isDone)
                             BoxShadow(
@@ -736,7 +1140,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           height: 2,
                           color: (index < currentStep) 
                               ? const Color(0xFF10B981) 
-                              : Colors.white.withOpacity(0.12),
+                              : (isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
                         ),
                       ),
                   ],
@@ -749,7 +1153,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: List.generate(5, (index) {
-              final bool isActive = index == currentStep && status != 'Resolved';
+              final bool isActive = index == currentStep;
               final bool isDone = index <= currentStep;
               
               return Expanded(
@@ -760,8 +1164,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                      fontSize: 9.5,
                      fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
                      color: isActive 
-                         ? const Color(0xFF818CF8) 
-                         : (isDone ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.4)),
+                         ? const Color(0xFF10B981) 
+                         : (isDone 
+                             ? (isDark ? Colors.white : const Color(0xFF1C1917)) 
+                             : (isDark ? const Color(0xFF94A3B8) : const Color(0xFFA8A29E))),
                   ),
                 ),
                );
@@ -836,11 +1242,13 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
         String? beforeImageUrl;
         if (hasBeforeImage) {
-          beforeImageUrl = '${ApiService.baseUrl}${data['image_path']}';
+          final path = data['image_path'].toString();
+          beforeImageUrl = '${ApiService.baseUrl}/${path.startsWith('/') ? path.substring(1) : path}';
         }
         String? afterImageUrl;
         if (hasAfterImage) {
-          afterImageUrl = '${ApiService.baseUrl}${data['completion_image_path']}';
+          final path = data['completion_image_path'].toString();
+          afterImageUrl = '${ApiService.baseUrl}/${path.startsWith('/') ? path.substring(1) : path}';
         }
 
         // Local state for before/after toggle (captured by StatefulBuilder closure)
@@ -848,6 +1256,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
         return StatefulBuilder(
           builder: (context, setSheetState) {
+            final isDark = Theme.of(context).brightness == Brightness.dark;
             // Determine current display image
             String? displayImage;
             if (hasBeforeAfter) {
@@ -861,15 +1270,22 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
             // Status tag mapping
             Color statusTextCol;
             Color statusBgCol;
-            if (isResolved) {
-              statusTextCol = const Color(0xFF34D399); // Emerald
-              statusBgCol = const Color(0xFF34D399).withOpacity(0.15);
-            } else if (data['status'] == 'Pending') {
-              statusTextCol = const Color(0xFFFBBF24); // Amber
-              statusBgCol = const Color(0xFFFBBF24).withOpacity(0.15);
+            final String stat = data['status'] ?? 'Pending';
+            if (stat == 'Resolved') {
+              statusTextCol = isDark ? const Color(0xFF34D399) : const Color(0xFF059669);
+              statusBgCol = statusTextCol.withOpacity(0.15);
+            } else if (stat == 'Pending') {
+              statusTextCol = const Color(0xFFEF4444); // Red
+              statusBgCol = statusTextCol.withOpacity(0.15);
+            } else if (stat == 'In Review') {
+              statusTextCol = const Color(0xFFF59E0B); // Amber
+              statusBgCol = statusTextCol.withOpacity(0.15);
+            } else if (stat == 'In Maintenance' || stat == 'In Process') {
+              statusTextCol = const Color(0xFF3B82F6); // Blue
+              statusBgCol = statusTextCol.withOpacity(0.15);
             } else {
-              statusTextCol = const Color(0xFF60A5FA); // Blue
-              statusBgCol = const Color(0xFF60A5FA).withOpacity(0.15);
+              statusTextCol = const Color(0xFF94A3B8); // Grey
+              statusBgCol = statusTextCol.withOpacity(0.15);
             }
 
             return ClipRRect(
@@ -878,10 +1294,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                 filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
                 child: Container(
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.65), // dark glassmorphic overlay
+                    color: isDark ? const Color(0xFF0F0F0F) : const Color(0xFFFAFAF9),
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.12),
+                      color: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
                       width: 1.2,
                     ),
                   ),
@@ -897,7 +1313,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           width: 36,
                           height: 4.5,
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
+                            color: isDark ? Colors.white30 : const Color(0xFFD6D3D1),
                             borderRadius: BorderRadius.circular(10),
                           ),
                         ),
@@ -916,10 +1332,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                               children: [
                                 Text(
                                   marker.label,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.white,
+                                    color: isDark ? Colors.white : const Color(0xFF1C1917),
                                   ),
                                 ),
                                 const SizedBox(height: 2),
@@ -931,7 +1347,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                       '${marker.priority} Priority',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: Colors.white.withOpacity(0.6),
+                                        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
                                         fontWeight: FontWeight.w500,
                                       ),
                                     ),
@@ -965,14 +1381,14 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFEC4899).withOpacity(0.15),
+                                    color: const Color(0xFFEF4444).withOpacity(0.15),
                                     borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(color: const Color(0xFFEC4899).withOpacity(0.3), width: 1.0),
+                                    border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.3), width: 1.0),
                                   ),
                                   child: Text(
-                                    '▲ $upvotes',
+                                    '⚠ $upvotes',
                                     style: const TextStyle(
-                                      color: Color(0xFFEC4899),
+                                      color: Color(0xFFEF4444),
                                       fontWeight: FontWeight.bold,
                                       fontSize: 11,
                                     ),
@@ -999,15 +1415,15 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                 errorBuilder: (ctx, err, stack) => Container(
                                   height: 200,
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.06),
+                                    color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
                                     borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                                    border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
                                   ),
                                   child: Center(
                                     child: Icon(
                                       Icons.broken_image_outlined,
                                       size: 48,
-                                      color: Colors.white.withOpacity(0.4),
+                                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFFA8A29E),
                                     ),
                                   ),
                                 ),
@@ -1056,9 +1472,9 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                 child: Container(
                                   padding: const EdgeInsets.all(3),
                                   decoration: BoxDecoration(
-                                    color: Colors.black.withOpacity(0.75),
+                                    color: isDark ? Colors.white10 : const Color(0xFFE7E5E4),
                                     borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: Colors.white.withOpacity(0.12)),
+                                    border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFD6D3D1)),
                                   ),
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -1068,13 +1484,15 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                         child: Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                                           decoration: BoxDecoration(
-                                            color: !showAfter ? Colors.white.withOpacity(0.2) : Colors.transparent,
+                                            color: !showAfter ? (isDark ? Colors.white24 : Colors.white) : Colors.transparent,
                                             borderRadius: BorderRadius.circular(8),
                                           ),
                                           child: Text(
                                             'Before',
                                             style: TextStyle(
-                                              color: !showAfter ? Colors.white : Colors.white70,
+                                              color: !showAfter 
+                                                  ? (isDark ? Colors.white : const Color(0xFF1C1917)) 
+                                                  : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
                                               fontWeight: FontWeight.bold,
                                               fontSize: 11,
                                             ),
@@ -1086,13 +1504,15 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                         child: Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                                           decoration: BoxDecoration(
-                                            color: showAfter ? const Color(0xFF6366F1) : Colors.transparent,
+                                            color: showAfter ? (isDark ? Colors.white24 : Colors.white) : Colors.transparent,
                                             borderRadius: BorderRadius.circular(8),
                                           ),
                                           child: Text(
                                             'After',
                                             style: TextStyle(
-                                              color: showAfter ? Colors.white : Colors.white70,
+                                              color: showAfter 
+                                                  ? (isDark ? Colors.white : const Color(0xFF1C1917)) 
+                                                  : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
                                               fontWeight: FontWeight.bold,
                                               fontSize: 11,
                                             ),
@@ -1112,19 +1532,19 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF6366F1).withOpacity(0.15),
+                            color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFF6366F1).withOpacity(0.3), width: 1.0),
+                            border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), width: 1.0),
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.auto_awesome, color: Color(0xFF818CF8), size: 18),
+                              Icon(Icons.auto_awesome, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 18),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
                                   "AI Prediction Match: ${data['ai_prediction']} (${data['confidence'] ?? ''})",
-                                  style: const TextStyle(
-                                    color: Color(0xFF818CF8),
+                                  style: TextStyle(
+                                    color: isDark ? Colors.white : const Color(0xFF1C1917),
                                     fontWeight: FontWeight.bold,
                                     fontSize: 12,
                                   ),
@@ -1166,28 +1586,28 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       ],
 
                       // ── Progress Bar ──
-                      _buildHorizontalProgress(data['status'] ?? 'Pending'),
+                      _buildHorizontalProgress(data['status'] ?? 'Pending', isDark),
 
                       // ── Address & Date ──
                       Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.04),
+                          color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.white.withOpacity(0.08)),
+                          border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
                         ),
                         child: Column(
                           children: [
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(Icons.map_outlined, size: 16, color: Colors.white.withOpacity(0.5)),
+                                const Icon(Icons.map_outlined, size: 16, color: Color(0xFF78716C)),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
                                     data['address'] ?? 'Unknown location',
                                     style: TextStyle(
-                                      color: Colors.white.withOpacity(0.8),
+                                      color: isDark ? Colors.white.withOpacity(0.9) : const Color(0xFF44403C),
                                       fontSize: 12,
                                       fontWeight: FontWeight.w500,
                                     ),
@@ -1199,13 +1619,13 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(Icons.access_time_rounded, size: 16, color: Colors.white.withOpacity(0.5)),
+                                const Icon(Icons.access_time_rounded, size: 16, color: Color(0xFF78716C)),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
                                     data['timestamp'] ?? 'Unknown time',
                                     style: TextStyle(
-                                      color: Colors.white.withOpacity(0.8),
+                                      color: isDark ? Colors.white.withOpacity(0.9) : const Color(0xFF44403C),
                                       fontSize: 12,
                                       fontWeight: FontWeight.w500,
                                     ),
@@ -1228,11 +1648,11 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                               MaterialPageRoute(
                                 builder: (_) => ReportDetailScreen(report: data),
                               ),
-                            ).then((_) => _fetchMapReports());
+                            ).then((_) => _fetchReports());
                           },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF6366F1),
-                            foregroundColor: Colors.white,
+                            backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
+                            foregroundColor: isDark ? Colors.black : Colors.white,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14),
                             ),
@@ -1261,8 +1681,15 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
   // ══════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final currentBrightness = Theme.of(context).brightness;
+    if (_lastBrightness != currentBrightness) {
+      _lastBrightness = currentBrightness;
+      _mapStyle = 'Standard';
+    }
+
     final safeBottom = MediaQuery.of(context).padding.bottom;
-    final bottomOffset = safeBottom > 0 ? safeBottom + 80.0 : 100.0;
+    final bottomOffset = safeBottom > 0 ? safeBottom + 68.0 : 88.0;
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Stack(
@@ -1296,6 +1723,28 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                 maxZoom: 19,
               ),
 
+              // ── Proximity Alert Radius Circle (50m) ──
+              if (_currentPosition != null)
+                CircleLayer(
+                  circles: [
+                    CircleMarker(
+                      point: LatLng(
+                        _currentPosition!.latitude,
+                        _currentPosition!.longitude,
+                      ),
+                      radius: 50.0, // 50 meters
+                      useRadiusInMeter: true,
+                      color: isDark 
+                          ? Colors.white.withOpacity(0.08)  // white/grey tint in dark mode
+                          : const Color(0xFF0EA5E9).withOpacity(0.12), // blue tint in light mode
+                      borderColor: isDark 
+                          ? Colors.white.withOpacity(0.3) 
+                          : const Color(0xFF0EA5E9).withOpacity(0.4),
+                      borderStrokeWidth: 1.5,
+                    ),
+                  ],
+                ),
+
               // ── User location dot — always visible ──
               if (_currentPosition != null)
                 MarkerLayer(
@@ -1309,12 +1758,12 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       height: 24,
                       child: Container(
                         decoration: BoxDecoration(
-                          color: const Color(0xFF818CF8), // indigo glow
+                          color: const Color(0xFF0EA5E9), // glowing blue/teal dot
                           shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 3),
+                          border: Border.all(color: Colors.white, width: 2), // white outline
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF818CF8).withOpacity(0.6),
+                              color: const Color(0xFF0EA5E9).withOpacity(0.6),
                               blurRadius: 10,
                               spreadRadius: 3,
                             )
@@ -1326,7 +1775,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                 ),
 
               // ── Issue visualisation: Heatmap OR Markers ──
-              if (_showHeatmap)
+              if (_showHeatmap && _filteredIssues.isNotEmpty)
                 HeatMapLayer(
                   heatMapDataSource: InMemoryHeatMapDataSource(
                     data: _filteredIssues
@@ -1385,8 +1834,8 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                 child: AnimatedSwitcher(
                                   duration: const Duration(milliseconds: 550), // Slower child cross-fade transition (550ms)
                                   child: issue.isClusterLeader
-                                      ? _buildCloverCluster(issue)
-                                      : _buildSinglePin(issue),
+                                      ? _buildCloverCluster(issue, isDark)
+                                      : _buildSinglePin(issue, isDark),
                                 ),
                               ),
                             ),
@@ -1402,19 +1851,19 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           // 2. LOADING OVERLAY
           if (_locationLoading)
             Container(
-              color: Colors.black.withOpacity(0.75),
-              child: const Center(
+              color: isDark ? Colors.black.withOpacity(0.85) : Colors.black.withOpacity(0.75),
+              child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    CircularProgressIndicator(color: Color(0xFF818CF8)),
-                    SizedBox(height: 16),
+                    CircularProgressIndicator(color: Colors.white),
+                    const SizedBox(height: 16),
                     Text(
                       'Getting your location…',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                        color: isDark ? Colors.white : Colors.white,
                       ),
                     ),
                   ],
@@ -1425,7 +1874,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           // 3. ERROR OVERLAY
           if (_locationError != null)
             Container(
-              color: Colors.black.withOpacity(0.85),
+              color: isDark ? Colors.black.withOpacity(0.9) : Colors.black.withOpacity(0.85),
               child: Center(
                 child: Padding(
                   padding: const EdgeInsets.all(32),
@@ -1444,36 +1893,12 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                         ),
                       ),
                       const SizedBox(height: 24),
-                      Container(
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                          ),
-                          borderRadius: BorderRadius.circular(14),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF6366F1).withOpacity(0.3),
-                              blurRadius: 14,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.transparent,
-                            shadowColor: Colors.transparent,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                          onPressed: _requestLocationAndLoad,
-                          icon: const Icon(Icons.refresh_rounded),
-                          label: const Text(
-                            'Try Again',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
+                      ElevatedButton.icon(
+                        onPressed: _requestLocationAndLoad,
+                        icon: const Icon(Icons.refresh_rounded, color: Colors.black),
+                        label: const Text(
+                          'Try Again',
+                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
                         ),
                       ),
                     ],
@@ -1487,62 +1912,93 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
               top: MediaQuery.of(context).padding.top + 10,
               left: 0,
               right: 0,
-              child: _buildSearchBar(),
+              child: _buildSearchBar(isDark),
             ),
 
-            // 5. FLOATING LOCATE BUTTON
+            // 5. PROXIMITY ALERT FLOATING BANNER (Glassmorphic Notification Card)
             Positioned(
-              bottom: _showLegend ? bottomOffset + 115 : bottomOffset, // Dynamically positioned to avoid legend overlap
+              top: MediaQuery.of(context).padding.top + 80,
+              left: 20,
+              right: 20,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 400),
+                transitionBuilder: (child, animation) {
+                  final offsetAnimation = Tween<Offset>(
+                    begin: const Offset(0, -0.3),
+                    end: Offset.zero,
+                  ).animate(CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutBack,
+                  ));
+                  return SlideTransition(
+                    position: offsetAnimation,
+                    child: FadeTransition(
+                      opacity: animation,
+                      child: child,
+                    ),
+                  );
+                },
+                child: _activeProximityAlertIssue != null
+                    ? _buildProximityAlertBanner(isDark)
+                    : const SizedBox.shrink(),
+              ),
+            ),
+
+            // 6. FLOATING LOCATE BUTTON
+            Positioned(
+              bottom: bottomOffset, // Stably aligned at the bottom offset
               right: 20,
               child: SizedBox(
-                width: 40,
-                height: 40,
+                width: 44, // Slightly larger touch target
+                height: 44,
                 child: GlassCard(
-                  color: Colors.black.withOpacity(0.88), // High contrast dark frosted glass for locate button
+                  color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.9) : Colors.white,
+                  borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
                   padding: EdgeInsets.zero,
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(22),
                   child: IconButton(
                     padding: EdgeInsets.zero,
                     onPressed: _goToMyLocation,
-                    icon: const Icon(Icons.my_location_rounded, color: Colors.white, size: 20),
+                    icon: Icon(Icons.my_location_rounded, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 20),
                   ),
                 ),
               ),
             ),
 
-            // 6. PRIORITY LEGEND OR COLLAPSED LEGEND TOGGLE
+            // 7. PRIORITY LEGEND OR COLLAPSED LEGEND TOGGLE
             Positioned(
               bottom: bottomOffset, // Positioned above bottom navigation bar to prevent overflow
               left: 20,
-              right: _showLegend ? 20 : null,
-              child: _showLegend ? _buildPriorityLegend() : _buildCollapsedLegendButton(),
+              right: _showLegend ? 76 : null, // Leaves 12px gap to locate button on the right when expanded
+              child: _showLegend ? _buildPriorityLegend(isDark) : _buildCollapsedLegendButton(isDark),
             ),
         ],
       ),
     );
   }
-               // ══════════════════════════════════════════════════════════════════════
+
+  // ══════════════════════════════════════════════════════════════════════
   //  WIDGETS
   // ══════════════════════════════════════════════════════════════════════
 
-  Widget _buildSearchBar() {
-    final hasActiveFilter = _selectedCategory != 0 || _statusFilter != 'All' || _showHeatmap || _showResolvedOnly;
+  Widget _buildSearchBar(bool isDark) {
     return GlassCard(
-      color: Colors.black.withOpacity(0.88), // Higher contrast dark frosted glass for search bar
+      color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.9) : Colors.white.withOpacity(0.95),
+      borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       borderRadius: BorderRadius.circular(16),
       child: Row(
         children: [
-          const Icon(Icons.location_on_rounded, color: Color(0xFFA5B4FC), size: 22), // Lighter indigo for contrast
+          Icon(Icons.location_on_rounded, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 22), // Location icon
           const SizedBox(width: 12),
           Expanded(
             child: Text(
               _currentPosition != null ? _currentAddressName : 'Smart City Map Monitor',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.bold,
-                color: Colors.white,
+                color: isDark ? Colors.white : const Color(0xFF1C1917),
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -1550,7 +2006,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           Container(
             width: 1,
             height: 24,
-            color: Colors.white.withOpacity(0.25), // Higher contrast divider
+            color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), // Higher contrast divider
             margin: const EdgeInsets.symmetric(horizontal: 8),
           ),
           InkWell(
@@ -1562,7 +2018,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                 children: [
                   Icon(
                     Icons.tune_rounded,
-                    color: hasActiveFilter ? const Color(0xFFA5B4FC) : Colors.white.withOpacity(0.9), // Brighter filter icon
+                    color: isDark ? Colors.white : const Color(0xFF0D9488), // Filter icon
                     size: 18,
                   ),
                   const SizedBox(width: 6),
@@ -1573,7 +2029,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
-                      color: hasActiveFilter ? const Color(0xFFA5B4FC) : Colors.white.withOpacity(0.9), // Brighter text
+                      color: isDark ? Colors.white : const Color(0xFF1C1917),
                     ),
                   ),
                 ],
@@ -1593,16 +2049,17 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setSheetState) {
+            final isDark = Theme.of(context).brightness == Brightness.dark;
             return ClipRRect(
               borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
                 child: Container(
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.88), // High contrast backdrop for sheet
+                    color: isDark ? const Color(0xFF0F0F0F) : const Color(0xFFFAFAF9), // Dynamic background
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.15), // Slightly brighter border
+                      color: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
                       width: 1.2,
                     ),
                   ),
@@ -1618,7 +2075,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           width: 40,
                           height: 5,
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.3),
+                            color: isDark ? Colors.white30 : const Color(0xFFD6D3D1),
                             borderRadius: BorderRadius.circular(10),
                           ),
                         ),
@@ -1627,27 +2084,27 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text(
+                          Text(
                             'Map Filters',
                             style: TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
-                              color: Colors.white,
+                              color: isDark ? Colors.white : const Color(0xFF1C1917),
                             ),
                           ),
                           IconButton(
                             onPressed: () => Navigator.pop(context),
-                            icon: const Icon(Icons.close_rounded, color: Colors.white), // Brighter close button
+                            icon: Icon(Icons.close_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
                           ),
                         ],
                       ),
                       const SizedBox(height: 16),
 
                       // ── Categories Section ──
-                      const Text(
+                      Text(
                         'CATEGORY',
                         style: TextStyle(
-                          color: Color(0xFFCBD5E1), // Slate-300 for maximum readability
+                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 1.0,
@@ -1668,20 +2125,20 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                               decoration: BoxDecoration(
                                 color: isSelected
-                                    ? const Color(0xFF818CF8).withOpacity(0.3)
-                                    : Colors.white.withOpacity(0.05),
+                                    ? (isDark ? Colors.white : const Color(0xFF0D9488))
+                                    : (isDark ? Colors.white10 : const Color(0xFFF5F5F4)),
                                 borderRadius: BorderRadius.circular(20),
                                 border: Border.all(
                                   color: isSelected
-                                      ? const Color(0xFFA5B4FC) // Lighter indigo border
-                                      : Colors.white.withOpacity(0.18), // High contrast unselected border
+                                      ? (isDark ? Colors.white : const Color(0xFF0D9488))
+                                      : (isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
                                   width: 1.2,
                                 ),
                               ),
                               child: Text(
                                 _categories[index],
                                 style: TextStyle(
-                                  color: isSelected ? Colors.white : Colors.white.withOpacity(0.85), // Brighter unselected text
+                                  color: isSelected ? (isDark ? Colors.black : Colors.white) : (isDark ? Colors.white : const Color(0xFF44403C)),
                                   fontWeight: FontWeight.bold,
                                   fontSize: 12,
                                 ),
@@ -1693,10 +2150,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       const SizedBox(height: 24),
 
                       // ── Status Section ──
-                      const Text(
+                      Text(
                         'REPORT STATUS',
                         style: TextStyle(
-                          color: Color(0xFFCBD5E1), // Slate-300
+                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 1.0,
@@ -1706,18 +2163,18 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.05),
+                          color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
                           borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.white.withOpacity(0.15)), // High contrast border
+                          border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
                         ),
                         child: DropdownButtonHideUnderline(
                           child: DropdownButton<String>(
                             value: _statusFilter,
-                            dropdownColor: const Color(0xFF0F172A), // Slate-900 dropdown background
-                            icon: const Icon(Icons.arrow_drop_down_rounded, color: Colors.white),
+                            dropdownColor: isDark ? const Color(0xFF0F0F0F) : const Color(0xFFFAFAF9),
+                            icon: Icon(Icons.arrow_drop_down_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
                             isExpanded: true,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: isDark ? Colors.white : const Color(0xFF1C1917),
                               fontWeight: FontWeight.bold,
                               fontSize: 13,
                             ),
@@ -1739,10 +2196,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       const SizedBox(height: 24),
 
                       // ── Map Style Section ──
-                      const Text(
+                      Text(
                         'MAP STYLE',
                         style: TextStyle(
-                          color: Color(0xFFCBD5E1), // Slate-300
+                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 1.0,
@@ -1763,20 +2220,20 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                               decoration: BoxDecoration(
                                 color: isSelected
-                                    ? const Color(0xFF818CF8).withOpacity(0.3)
-                                    : Colors.white.withOpacity(0.05),
+                                    ? (isDark ? Colors.white : const Color(0xFF0D9488))
+                                    : (isDark ? Colors.white10 : const Color(0xFFF5F5F4)),
                                 borderRadius: BorderRadius.circular(20),
                                 border: Border.all(
                                   color: isSelected
-                                      ? const Color(0xFFA5B4FC) // Lighter indigo border
-                                      : Colors.white.withOpacity(0.18), // High contrast border
+                                      ? (isDark ? Colors.white : const Color(0xFF0D9488))
+                                      : (isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
                                   width: 1.2,
                                 ),
                               ),
                               child: Text(
                                 style,
                                 style: TextStyle(
-                                  color: isSelected ? Colors.white : Colors.white.withOpacity(0.85), // Brighter unselected text
+                                  color: isSelected ? (isDark ? Colors.black : Colors.white) : (isDark ? Colors.white : const Color(0xFF44403C)),
                                   fontWeight: FontWeight.bold,
                                   fontSize: 12,
                                 ),
@@ -1788,10 +2245,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       const SizedBox(height: 24),
 
                       // ── Toggles ──
-                      const Text(
+                      Text(
                         'VISUAL OPTIONS',
                         style: TextStyle(
-                          color: Color(0xFFCBD5E1), // Slate-300
+                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 1.0,
@@ -1801,32 +2258,32 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       // Heatmap switch
                       SwitchListTile.adaptive(
                         contentPadding: EdgeInsets.zero,
-                        title: const Text(
+                        title: Text(
                           'Show Heatmap',
-                          style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
+                          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1C1917), fontSize: 14, fontWeight: FontWeight.w500),
                         ),
-                        subtitle: const Text(
+                        subtitle: Text(
                           'Highlight issue density hotspots',
-                          style: TextStyle(color: Colors.white70, fontSize: 11),
+                          style: TextStyle(color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 11),
                         ),
-                        activeColor: const Color(0xFFA5B4FC), // Lighter indigo switch
+                        activeColor: isDark ? Colors.white : const Color(0xFF0D9488),
                         value: _showHeatmap,
                         onChanged: (val) {
                           setSheetState(() => _showHeatmap = val);
                           setState(() => _showHeatmap = val);
                         },
                       ),
-                      const Divider(color: Colors.white10),
+                      Divider(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
                       // Resolved only switch
                       SwitchListTile.adaptive(
                         contentPadding: EdgeInsets.zero,
-                        title: const Text(
+                        title: Text(
                           'Resolved Only',
-                          style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
+                          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1C1917), fontSize: 14, fontWeight: FontWeight.w500),
                         ),
-                        subtitle: const Text(
+                        subtitle: Text(
                           'Show only completed maintenance tasks',
-                          style: TextStyle(color: Colors.white70, fontSize: 11),
+                          style: TextStyle(color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 11),
                         ),
                         activeColor: const Color(0xFF34D399), // Emerald switch
                         value: _showResolvedOnly,
@@ -1843,8 +2300,8 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           Expanded(
                             child: OutlinedButton(
                               style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.white,
-                                side: BorderSide(color: Colors.white.withOpacity(0.35)), // Brighter border
+                                foregroundColor: isDark ? Colors.white : const Color(0xFF44403C),
+                                side: BorderSide(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
                                 padding: const EdgeInsets.symmetric(vertical: 14),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                               ),
@@ -1854,14 +2311,14 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                   _statusFilter = 'All';
                                   _showHeatmap = false;
                                   _showResolvedOnly = false;
-                                  _mapStyle = 'Muted Light';
+                                  _mapStyle = 'Standard';
                                 });
                                 setState(() {
                                   _selectedCategory = 0;
                                   _statusFilter = 'All';
                                   _showHeatmap = false;
                                   _showResolvedOnly = false;
-                                  _mapStyle = 'Muted Light';
+                                  _mapStyle = 'Standard';
                                 });
                               },
                               child: const Text('Reset', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -1869,24 +2326,16 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                           ),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: Container(
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                                ),
-                                borderRadius: BorderRadius.circular(12),
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
+                                foregroundColor: isDark ? Colors.black : Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                elevation: 0,
                               ),
-                              child: ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.transparent,
-                                  shadowColor: Colors.transparent,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                ),
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Apply', style: TextStyle(fontWeight: FontWeight.bold)),
-                              ),
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Apply', style: TextStyle(fontWeight: FontWeight.bold)),
                             ),
                           ),
                         ],
@@ -1902,11 +2351,11 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     );
   }
 
-
-  Widget _buildPriorityLegend() {
+  Widget _buildPriorityLegend(bool isDark) {
     final count = _filteredIssues.length;
     return GlassCard(
-      color: Colors.black.withOpacity(0.88), // High contrast dark frosted glass for legend
+      color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.95) : Colors.white.withOpacity(0.95),
+      borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
       padding: const EdgeInsets.all(14),
       borderRadius: BorderRadius.circular(16),
       child: Column(
@@ -1916,10 +2365,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
+              Text(
                 'MAP LEGEND',
                 style: TextStyle(
-                  color: Color(0xFFCBD5E1), // Slate-300 for readability
+                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.0,
@@ -1928,15 +2377,15 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
               Row(
                 children: [
                   Text(
-                    '$count ${count == 1 ? 'issue' : 'issues'} shown',
-                    style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 11, fontWeight: FontWeight.bold),
+                    "$count ${count == 1 ? 'issue' : 'issues'} shown",
+                    style: TextStyle(color: isDark ? Colors.white70 : const Color(0xFF44403C), fontSize: 11, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(width: 8),
                   GestureDetector(
                     onTap: () => setState(() => _showLegend = false),
                     child: Icon(
                       Icons.close_rounded,
-                      color: Colors.white.withOpacity(0.85), // Higher contrast close icon
+                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
                       size: 16,
                     ),
                   ),
@@ -1958,23 +2407,23 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       width: 9,
                       height: 9,
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.8),
+                        color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
                         borderRadius: const BorderRadius.only(
                           topLeft: Radius.circular(4.5),
                           topRight: Radius.circular(4.5),
                           bottomLeft: Radius.circular(4.5),
                           bottomRight: Radius.zero,
                         ),
-                        border: Border.all(color: const Color(0xFFA5B4FC), width: 1.0),
+                        border: Border.all(color: isDark ? Colors.white : const Color(0xFF1C1917), width: 1.0),
                       ),
                     ),
                   ),
                 ),
               ),
               const SizedBox(width: 8),
-              const Text(
+              Text(
                 'Citizen Report Marker',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white),
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: isDark ? Colors.white : const Color(0xFF1C1917)),
               ),
             ],
           ),
@@ -1982,16 +2431,49 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           // Row 2: Status dots part 1
           Row(
             children: [
-              Expanded(child: _legendItem(const Color(0xFFEF4444), 'Pending Alert')),
-              Expanded(child: _legendItem(const Color(0xFFF59E0B), 'In Review')),
+              Expanded(child: _legendItem(const Color(0xFFEF4444), 'Pending Alert', isDark)),
+              Expanded(child: _legendItem(const Color(0xFFF59E0B), 'In Review', isDark)),
             ],
           ),
           const SizedBox(height: 8),
           // Row 3: Status dots part 2
           Row(
             children: [
-              Expanded(child: _legendItem(const Color(0xFF3B82F6), 'In Maintenance')),
-              Expanded(child: _legendItem(const Color(0xFF10B981), 'Resolved')),
+              Expanded(child: _legendItem(const Color(0xFF3B82F6), 'In Maintenance', isDark)),
+              Expanded(child: _legendItem(const Color(0xFF10B981), 'Resolved', isDark)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Divider(color: isDark ? Colors.white12 : const Color(0xFFE7E5E4), height: 1),
+          const SizedBox(height: 10),
+          Text(
+            'CATEGORY COLORS',
+            style: TextStyle(
+              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.0,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: _legendNeonItem(const Color(0xFFFF6B35), 'Road/Damage', isDark)),
+              Expanded(child: _legendNeonItem(const Color(0xFFFFE135), 'Lighting', isDark)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(child: _legendNeonItem(const Color(0xFF39FF14), 'Waste', isDark)),
+              Expanded(child: _legendNeonItem(const Color(0xFF00CFFF), 'Drainage', isDark)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(child: _legendNeonItem(const Color(0xFFDA00FF), 'Noise', isDark)),
+              Expanded(child: _legendNeonItem(const Color(0xFFFF2D78), 'Other', isDark)),
             ],
           ),
         ],
@@ -1999,11 +2481,12 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildCollapsedLegendButton() {
+  Widget _buildCollapsedLegendButton(bool isDark) {
     return SizedBox(
       height: 40,
       child: GlassCard(
-        color: Colors.black.withOpacity(0.88), // High contrast dark frosted glass for collapsed pill
+        color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.9) : Colors.white.withOpacity(0.95),
+        borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
         padding: const EdgeInsets.symmetric(horizontal: 14),
         borderRadius: BorderRadius.circular(20),
         child: InkWell(
@@ -2011,12 +2494,12 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.info_outline_rounded, color: Color(0xFFA5B4FC), size: 18), // Lighter indigo for maximum contrast
+              Icon(Icons.info_outline_rounded, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 18),
               const SizedBox(width: 8),
               Text(
                 'Show Legend',
                 style: TextStyle(
-                  color: Colors.white.withOpacity(0.9),
+                  color: isDark ? Colors.white : const Color(0xFF1C1917),
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
                 ),
@@ -2028,7 +2511,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     );
   }
 
-  Widget _legendItem(Color color, String label) {
+  Widget _legendItem(Color color, String label, bool isDark) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -2051,7 +2534,44 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
         Expanded(
           child: Text(
             label,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: isDark ? Colors.white : const Color(0xFF1C1917)),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _legendNeonItem(Color neonColor, String label, bool isDark) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
+            borderRadius: BorderRadius.circular(2),
+            border: Border.all(color: neonColor, width: 1.5),
+            boxShadow: isDark ? [
+              BoxShadow(
+                color: neonColor.withOpacity(0.5),
+                blurRadius: 4,
+                spreadRadius: 0.5,
+              )
+            ] : [],
+          ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: isDark ? Colors.white70 : const Color(0xFF44403C),
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),

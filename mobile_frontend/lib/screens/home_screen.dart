@@ -13,6 +13,8 @@ import '../services/api_service.dart';
 import '../services/notification_service.dart';
 import '../user_session.dart';
 import 'login_screen.dart';
+import '../theme_manager.dart';
+
 import '../widgets/glass_card.dart';
 import '../widgets/background_decorator.dart';
 
@@ -63,153 +65,107 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Widget _buildActiveTabIcon(IconData icon, Color activeColor, {bool showBadge = false}) {
-    return SizedBox(
-      width: 32,
-      height: 34,
-      child: Stack(
-        alignment: Alignment.topCenter,
-        clipBehavior: Clip.none,
-        children: [
-          // Shadow at the bottom
-          Positioned(
-            bottom: 1,
-            child: Container(
-              width: 10,
-              height: 2.5,
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: const BorderRadius.all(Radius.elliptical(5, 1.25)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.6),
-                    blurRadius: 1.5,
-                    spreadRadius: 0.5,
+  Widget _buildTabIcon(IconData icon, bool isActive, Color activeColor, {bool showBadge = false}) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
+    // Calculate unselected color dynamically
+    final inactiveColor = isDark
+        ? (_selectedIndex == 1
+            ? Colors.white.withOpacity(0.85)
+            : Colors.white.withOpacity(0.6))
+        : (_selectedIndex == 1
+            ? const Color(0xFF78716C)
+            : const Color(0xFFA8A29E));
+            
+    final color = isActive ? activeColor : inactiveColor;
+    
+    return TweenAnimationBuilder<double>(
+      key: ValueKey("${icon.codePoint}_${isActive}"),
+      tween: Tween<double>(begin: isActive ? 1.0 : 1.18, end: isActive ? 1.18 : 1.0),
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutBack,
+      builder: (context, scale, child) {
+        return Transform.scale(
+          scale: scale,
+          child: Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              Icon(
+                icon,
+                color: color,
+                size: 24,
+                shadows: (isActive && isDark) ? [
+                  const Shadow(
+                    color: Colors.white,
+                    blurRadius: 10,
                   ),
-                ],
+                  Shadow(
+                    color: Colors.white.withOpacity(0.6),
+                    blurRadius: 20,
+                  ),
+                ] : (isActive && !isDark) ? [
+                  const Shadow(
+                    color: Colors.white,
+                    blurRadius: 6,
+                  ),
+                  Shadow(
+                    color: const Color(0xFF0D9488).withOpacity(0.4),
+                    blurRadius: 15,
+                  ),
+                ] : null,
               ),
-            ),
-          ),
-          // Floating Teardrop Pin
-          Positioned(
-            top: 0,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                // Rotated Teardrop base
-                Transform.rotate(
-                  angle: math.pi / 4,
+              if (showBadge)
+                Positioned(
+                  top: -2,
+                  right: -2,
                   child: Container(
-                    width: 20,
-                    height: 20,
+                    width: 7,
+                    height: 7,
                     decoration: BoxDecoration(
-                      color: activeColor.withOpacity(0.25),
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(10),
-                        topRight: Radius.circular(10),
-                        bottomLeft: Radius.circular(10),
-                        bottomRight: Radius.zero,
-                      ),
-                      border: Border.all(
-                        color: activeColor, // Glowing border matches active tab color
-                        width: 1.5,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: activeColor.withOpacity(0.4),
-                          blurRadius: 4,
-                          spreadRadius: 0.5,
-                        ),
-                      ],
+                      color: const Color(0xFFEF4444),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: isDark ? Colors.black : Colors.white, width: 0.8),
                     ),
                   ),
                 ),
-                // Icon
-                Positioned.fill(
-                  child: Center(
-                    child: Transform.rotate(
-                      angle: -math.pi / 4,
-                      child: Icon(
-                        icon,
-                        color: Colors.white,
-                        size: 11,
-                      ),
-                    ),
-                  ),
-                ),
-                // Glowing notification dot (new symbol)
-                if (showBadge)
-                  Positioned(
-                    top: -3,
-                    right: -3,
-                    child: Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFEF4444), // glowing red dot
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.black, width: 0.8),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFFEF4444).withOpacity(0.7),
-                            blurRadius: 4,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
+  Widget _buildActiveTabIcon(IconData icon, Color activeColor, {bool showBadge = false}) {
+    return _buildTabIcon(icon, true, activeColor, showBadge: showBadge);
+  }
+
   Widget _buildInactiveTabIcon(IconData icon, {bool showBadge = false}) {
-    if (!showBadge) {
-      return Icon(icon);
-    }
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Icon(icon),
-        Positioned(
-          top: -2,
-          right: -2,
-          child: Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(
-              color: const Color(0xFFEF4444),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.black, width: 0.8),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFEF4444).withOpacity(0.7),
-                  blurRadius: 4,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final activeColor = isDark ? Colors.white : const Color(0xFF0D9488);
+    return _buildTabIcon(icon, false, activeColor, showBadge: showBadge);
   }
 
   @override
   Widget build(BuildContext context) {
-    final activeColor = _selectedIndex == 1
-        ? const Color(0xFFA5B4FC)
-        : const Color(0xFF818CF8);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final activeColor = isDark
+        ? Colors.white
+        : const Color(0xFF0D9488); // Teal for light mode active tab
+
+    final unselectedColor = isDark
+        ? (_selectedIndex == 1
+            ? Colors.white.withOpacity(0.85)
+            : Colors.white.withOpacity(0.6))
+        : (_selectedIndex == 1
+            ? const Color(0xFF78716C)
+            : const Color(0xFFA8A29E));
 
     return BackgroundDecorator(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         extendBody: true, // Allows body widgets (like maps) to sit behind the floating navbar
-        body: IndexedStack(
+        body: SmoothIndexedStack(
           index: _selectedIndex,
           children: _widgetOptions,
         ),
@@ -222,9 +178,9 @@ class _HomeScreenState extends State<HomeScreen> {
             right: 16,
           ),
           child: GlassCard(
-            color: _selectedIndex == 1
-                ? Colors.black.withOpacity(0.88) // High contrast dark backing for map screen
-                : Colors.black.withOpacity(0.65), // Darker frosted glass backing for other screens
+            color: isDark
+                ? const Color(0xFF1C1917) // Fully solid dark charcoal in dark mode
+                : Colors.white, // Fully solid white in light mode
             padding: EdgeInsets.zero,
             borderRadius: BorderRadius.circular(24),
             child: BottomNavigationBar(
@@ -233,31 +189,29 @@ class _HomeScreenState extends State<HomeScreen> {
               type: BottomNavigationBarType.fixed,
               currentIndex: _selectedIndex,
               selectedItemColor: activeColor,
-              unselectedItemColor: _selectedIndex == 1
-                  ? Colors.white.withOpacity(0.85) // High-contrast white for unselected items on map screen
-                  : Colors.white.withOpacity(0.6), // Brighter unselected label & icon color
+              unselectedItemColor: unselectedColor,
               selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
               unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 11),
               onTap: _onItemTapped,
               items: [
                 BottomNavigationBarItem(
-                  icon: _buildInactiveTabIcon(Icons.dashboard_rounded),
-                  activeIcon: _buildActiveTabIcon(Icons.dashboard_rounded, activeColor),
+                  icon: _buildInactiveTabIcon(Icons.space_dashboard_rounded),
+                  activeIcon: _buildActiveTabIcon(Icons.space_dashboard_rounded, activeColor),
                   label: 'Home',
                 ),
                 BottomNavigationBarItem(
-                  icon: _buildInactiveTabIcon(Icons.map_rounded),
-                  activeIcon: _buildActiveTabIcon(Icons.map_rounded, activeColor),
+                  icon: _buildInactiveTabIcon(Icons.explore_rounded),
+                  activeIcon: _buildActiveTabIcon(Icons.explore_rounded, activeColor),
                   label: 'Map',
                 ),
                 BottomNavigationBarItem(
-                  icon: _buildInactiveTabIcon(Icons.assignment_rounded, showBadge: _hasUnreadNotification),
-                  activeIcon: _buildActiveTabIcon(Icons.assignment_rounded, activeColor, showBadge: _hasUnreadNotification),
+                  icon: _buildInactiveTabIcon(Icons.task_alt_rounded, showBadge: _hasUnreadNotification),
+                  activeIcon: _buildActiveTabIcon(Icons.task_alt_rounded, activeColor, showBadge: _hasUnreadNotification),
                   label: 'History',
                 ),
                 BottomNavigationBarItem(
-                  icon: _buildInactiveTabIcon(Icons.person_rounded),
-                  activeIcon: _buildActiveTabIcon(Icons.person_rounded, activeColor),
+                  icon: _buildInactiveTabIcon(Icons.face_rounded),
+                  activeIcon: _buildActiveTabIcon(Icons.face_rounded, activeColor),
                   label: 'Profile',
                 ),
               ],
@@ -288,6 +242,8 @@ class _DashboardContentState extends State<DashboardContent> {
   int _resolvedReports = 0;
   Map<String, int> _categories = {};
   List<dynamic>    _recentReports = [];
+  List<dynamic>    _workerTasksToDo = [];
+  List<dynamic>    _workerTasksSubmitted = [];
 
   // ── Notification banner state ──────────────────────────────────────────
   StreamSubscription<StatusChange>? _notifSub;
@@ -340,35 +296,57 @@ class _DashboardContentState extends State<DashboardContent> {
 
     try {
       if (isWorker) {
-        final reportsResponse = await ApiService.getReports(
+        // Fetch worker's personal reports to compute assigned task counts
+        final workerResponse = await ApiService.getReports(
           role: session.role,
           username: session.username,
         );
+        // Fetch global stats and reports for overview and recent list (open to all users)
+        final statsResponse   = await ApiService.getStats();
+        final reportsResponse = await ApiService.getReports();
 
-        if (reportsResponse.statusCode == 200) {
+        if (workerResponse.statusCode == 200 &&
+            statsResponse.statusCode == 200 &&
+            reportsResponse.statusCode == 200) {
+          final workerReports = jsonDecode(workerResponse.body) as List;
+          final statsData = jsonDecode(statsResponse.body);
           final reportsData = jsonDecode(reportsResponse.body) as List;
+
+          // Sort global reports by timestamp descending to show the live 3 most recent
+          reportsData.sort((a, b) {
+            final ta = DateTime.tryParse(a['timestamp'] ?? '') ?? DateTime(0);
+            final tb = DateTime.tryParse(b['timestamp'] ?? '') ?? DateTime(0);
+            return tb.compareTo(ta);
+          });
+
           setState(() {
-            _totalReports    = reportsData.length;
-            _pendingReports  = reportsData.where((r) => r['status'] == 'In Process').length;
-            _resolvedReports = reportsData.where((r) => r['status'] == 'In Maintenance').length;
-            _categories      = {};
-            for (var r in reportsData) {
-              final cat = r['categories'] ?? 'Other';
-              _categories[cat] = (_categories[cat] ?? 0) + 1;
-            }
+            _totalReports    = workerReports.length;
+            _pendingReports  = workerReports.where((r) => r['status'] == 'In Process').length;
+            _resolvedReports = workerReports.where((r) => r['status'] == 'In Maintenance').length;
+            _categories      = Map<String, int>.from(statsData['categories'] ?? {});
             _recentReports   = reportsData.take(3).toList();
+            _workerTasksToDo = workerReports.where((r) => r['worker_completed'] != 1).toList();
+            _workerTasksSubmitted = workerReports.where((r) => r['worker_completed'] == 1).toList();
             _isLoading       = false;
           });
         } else {
           throw Exception('Server returned an error');
         }
       } else {
-        final statsResponse   = await ApiService.getStats(session.userId!);
-        final reportsResponse = await ApiService.getReports(userId: session.userId!);
+        // Citizen: fetch global stats and reports (open to all users)
+        final statsResponse   = await ApiService.getStats();
+        final reportsResponse = await ApiService.getReports();
 
         if (statsResponse.statusCode == 200 && reportsResponse.statusCode == 200) {
           final statsData   = jsonDecode(statsResponse.body);
           final reportsData = jsonDecode(reportsResponse.body) as List;
+
+          // Sort global reports by timestamp descending to show the live 3 most recent
+          reportsData.sort((a, b) {
+            final ta = DateTime.tryParse(a['timestamp'] ?? '') ?? DateTime(0);
+            final tb = DateTime.tryParse(b['timestamp'] ?? '') ?? DateTime(0);
+            return tb.compareTo(ta);
+          });
 
           setState(() {
             _totalReports    = statsData['total']    ?? 0;
@@ -422,11 +400,12 @@ class _DashboardContentState extends State<DashboardContent> {
     final double baseWidth = 24.0 * sizeMultiplier;
     final double baseHeight = 24.0 * sizeMultiplier;
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final Color glowColor = upvotes >= 5
         ? const Color(0xFFF59E0B) // Amber gold for high votes
         : upvotes >= 2
             ? const Color(0xFFEC4899) // Hot pink for trending votes
-            : const Color(0xFFA5B4FC); // Standard Indigo
+            : (isDark ? Colors.white : const Color(0xFF1C1917));
 
     return SizedBox(
       width: 36 * sizeMultiplier,
@@ -469,7 +448,7 @@ class _DashboardContentState extends State<DashboardContent> {
                     width: baseWidth,
                     height: baseHeight,
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.85),
+                      color: isDark ? Colors.black.withOpacity(0.85) : const Color(0xFFF5F5F4),
                       borderRadius: const BorderRadius.only(
                         topLeft: Radius.circular(12),
                         topRight: Radius.circular(12),
@@ -497,7 +476,7 @@ class _DashboardContentState extends State<DashboardContent> {
                       angle: -math.pi / 4,
                       child: Icon(
                         _getCategoryIcon(category),
-                        color: Colors.white,
+                        color: isDark ? Colors.white : const Color(0xFF1C1917),
                         size: 13 * sizeMultiplier,
                       ),
                     ),
@@ -524,7 +503,7 @@ class _DashboardContentState extends State<DashboardContent> {
                     ),
                   ),
                 ),
-                // Upvotes indicator badge
+                // Upvotes indicator
                 if (upvotes > 0)
                   Positioned(
                     bottom: -3,
@@ -564,8 +543,8 @@ class _DashboardContentState extends State<DashboardContent> {
             label: 'Resolved');
       case ReportStatus.inMaintenance:
         return const _StatusConfig(
-            color: Color(0xFF7C3AED),
-            bg: Color(0xFFF5F3FF),
+            color: const Color(0xFF0EA5E9),
+            bg: const Color(0xFFF0F9FF),
             icon: Icons.construction_rounded,
             label: 'In Maintenance');
       case ReportStatus.inProcess:
@@ -580,6 +559,12 @@ class _DashboardContentState extends State<DashboardContent> {
             bg: Color(0xFFEFF6FF),
             icon: Icons.rate_review_rounded,
             label: 'In Review');
+      case ReportStatus.rejected:
+        return const _StatusConfig(
+            color: Color(0xFFEF4444),
+            bg: Color(0xFFFEF2F2),
+            icon: Icons.cancel_rounded,
+            label: 'Rejected');
       default:
         return const _StatusConfig(
             color: Color(0xFFDC2626),
@@ -591,11 +576,14 @@ class _DashboardContentState extends State<DashboardContent> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isWorker = UserSession.instance.role.toLowerCase().contains('worker');
+
     if (_isLoading) {
       return const Scaffold(
         backgroundColor: Colors.transparent,
         body: Center(
-          child: CircularProgressIndicator(color: Color(0xFF818CF8)),
+          child: CircularProgressIndicator(color: Colors.white),
         ),
       );
     }
@@ -631,7 +619,7 @@ class _DashboardContentState extends State<DashboardContent> {
         children: [
           RefreshIndicator(
             onRefresh: _fetchDashboardData,
-            color: const Color(0xFF818CF8),
+            color: Colors.white,
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
               child: Column(
@@ -644,44 +632,140 @@ class _DashboardContentState extends State<DashboardContent> {
                     child: _buildMainActionButton(context),
                   ),
                   const SizedBox(height: 24),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: const [
-                        Text(
-                          "Recent Reports",
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                            letterSpacing: -0.5,
+                  
+                  if (isWorker) ...[
+                    // ── WORKER ACTIVE TASKS TO-DO ──
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: const [
+                          Text(
+                            "My Tasks To-Do",
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (_workerTasksToDo.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: GlassCard(
+                          padding: const EdgeInsets.all(24),
+                          child: Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.task_alt_rounded,
+                                  color: isDark ? Colors.white70 : const Color(0xFF0D9488),
+                                  size: 36,
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  "No pending tasks assigned. You're all caught up!",
+                                  style: TextStyle(
+                                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  if (_recentReports.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 36, horizontal: 20),
-                      child: Center(
-                        child: Text(
-                          "No reports submitted yet. Create one!",
-                          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
+                      )
+                    else
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        itemCount: _workerTasksToDo.length,
+                        itemBuilder: (context, index) {
+                          return _buildReportCard(_workerTasksToDo[index]);
+                        },
+                      ),
+
+                    // ── WORKER SUBMITTED TASKS ──
+                    if (_workerTasksSubmitted.isNotEmpty) ...[
+                      const SizedBox(height: 24),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: const [
+                            Text(
+                              "Submitted (Awaiting Review)",
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    )
-                  else
-                    ListView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
+                      const SizedBox(height: 12),
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        itemCount: _workerTasksSubmitted.length,
+                        itemBuilder: (context, index) {
+                          return _buildReportCard(_workerTasksSubmitted[index]);
+                        },
+                      ),
+                    ],
+                  ] else ...[
+                    // ── CITIZEN RECENT REPORTS ──
+                    Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
-                      itemCount: _recentReports.length,
-                      itemBuilder: (context, index) {
-                        return _buildReportCard(_recentReports[index]);
-                      },
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: const [
+                          Text(
+                            "Recent Reports",
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
+                    const SizedBox(height: 12),
+                    if (_recentReports.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 36, horizontal: 20),
+                        child: Center(
+                          child: Text(
+                            "No reports submitted yet. Create one!",
+                            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
+                          ),
+                        ),
+                      )
+                    else
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        itemCount: _recentReports.length,
+                        itemBuilder: (context, index) {
+                          return _buildReportCard(_recentReports[index]);
+                        },
+                      ),
+                  ],
+                  
                   const SizedBox(height: 16),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -712,7 +796,7 @@ class _DashboardContentState extends State<DashboardContent> {
     final isResolved = change.newStatus == 'Resolved';
     final bannerColor = isResolved
         ? const Color(0xFF059669)   // Emerald for resolved
-        : const Color(0xFF6366F1);  // Indigo for in-progress
+        : const Color(0xFFFBBF24);  // Lavender/purple for in-progress
 
     return Material(
       color: Colors.transparent,
@@ -793,433 +877,405 @@ class _DashboardContentState extends State<DashboardContent> {
   Widget _buildHeader(BuildContext context) {
     final username = UserSession.instance.username;
     final isWorker = UserSession.instance.role.toLowerCase().contains('worker');
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Date at the top, separate from row to keep Row centering clean
-          Text(
-            _getFormattedDate(),
-            style: const TextStyle(
-              color: Color(0xFF64748B),
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.8,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.center,
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isWorker ? "Worker Portal" : "Welcome back,",
-                      style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14, fontWeight: FontWeight.w500),
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
+              // Date at the top, separate from row to keep Row centering clean
+              Text(
+                _getFormattedDate(),
+                style: const TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Flexible(
-                          child: Text(
-                            username,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: -0.5,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                        Text(
+                          isWorker ? "Worker Portal" : "Welcome back,",
+                          style: TextStyle(
+                            color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF818CF8).withOpacity(0.18),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: const Color(0xFFA5B4FC).withOpacity(0.35), width: 1.0),
-                          ),
-                          child: Text(
-                            UserSession.instance.role.toUpperCase(),
-                            style: const TextStyle(
-                                color: Color(0xFFE0E7FF),
-                                fontSize: 9,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 1.2),
-                          ),
+                        const SizedBox(height: 2),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                username,
+                                style: TextStyle(
+                                  color: isDark ? Colors.white : const Color(0xFF1C1917),
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: -0.5,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: isDark ? Colors.white.withOpacity(0.18) : const Color(0xFFF5F5F4),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: isDark ? Colors.white.withOpacity(0.35) : const Color(0xFFD6D3D1),
+                                  width: 1.0,
+                                ),
+                              ),
+                              child: Text(
+                                UserSession.instance.role.toUpperCase(),
+                                style: TextStyle(
+                                    color: isDark ? Colors.white70 : const Color(0xFF78716C),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1.2),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF818CF8), Color(0xFFC084FC)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
                   ),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF818CF8).withOpacity(0.4),
-                      blurRadius: 10,
-                      spreadRadius: 1,
-                    )
-                  ],
-                  border: Border.all(color: Colors.white.withOpacity(0.25), width: 1.5),
-                ),
-                child: Center(
-                  child: Text(
-                    username.isNotEmpty ? username.substring(0, 1).toUpperCase() : "U",
-                    style: const TextStyle(
+
+                  const SizedBox(width: 8),
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
                       color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                      border: Border.all(color: isDark ? Colors.white : const Color(0xFFE7E5E4), width: 1.5),
+                    ),
+                    child: ClipOval(
+                      child: Image.asset(
+                        getAvatarPath(username),
+                        fit: BoxFit.cover,
+                      ),
                     ),
                   ),
-                ),
+                ],
+              ),
+              const SizedBox(height: 52),
+              Row(
+                children: [
+                  _buildStatItem(
+                      Icons.assignment_rounded,
+                      _totalReports.toString(),
+                      isWorker ? "Assigned" : "Total",
+                      isDark ? Colors.white : const Color(0xFF0D9488),
+                      'assets/stat_total.png'),
+                  _buildStatItem(
+                      Icons.pending_actions_rounded,
+                      _pendingReports.toString(),
+                      isWorker ? "In Process" : "Pending",
+                      isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
+                      'assets/stat_pending.png'),
+                  _buildStatItem(
+                      Icons.task_alt_rounded,
+                      _resolvedReports.toString(),
+                      isWorker ? "In Maint." : "Resolved",
+                      isDark ? const Color(0xFF34D399) : const Color(0xFF059669),
+                      'assets/stat_resolved.png'),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              _buildStatItem(
-                  Icons.assignment_rounded, _totalReports.toString(), isWorker ? "Assigned" : "Total", const Color(0xFF818CF8)),
-              _buildStatItem(
-                  Icons.pending_actions_rounded, _pendingReports.toString(), isWorker ? "In Process" : "Pending", const Color(0xFFFBBF24)),
-              _buildStatItem(
-                  Icons.task_alt_rounded, _resolvedReports.toString(), isWorker ? "In Maint." : "Resolved", const Color(0xFF34D399)),
-            ],
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
-  Widget _buildStatItem(IconData icon, String value, String label, Color accentColor) {
+  Widget _buildStatItem(IconData icon, String value, String label, Color accentColor, String assetPath) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Expanded(
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 4),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            // Underlay glow centered behind the card
-            Center(
-              child: Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: accentColor.withOpacity(0.2),
-                      blurRadius: 16,
-                      spreadRadius: 3,
-                    ),
-                  ],
+        child: SizedBox(
+          width: double.infinity,
+          child: GlassCard(
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+            margin: EdgeInsets.zero,
+            borderRadius: BorderRadius.circular(8),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Center(
+                  child: Image.asset(
+                    assetPath,
+                    width: 110,
+                    height: 110,
+                    fit: BoxFit.contain,
+                    color: isDark 
+                        ? Colors.white.withOpacity(0.08) 
+                        : const Color(0xFF1C1917).withOpacity(0.08),
+                    colorBlendMode: BlendMode.srcIn,
+                  ),
                 ),
-              ),
-            ),
-            SizedBox(
-              width: double.infinity,
-              child: GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-                margin: EdgeInsets.zero,
-                borderRadius: BorderRadius.circular(20),
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: accentColor.withOpacity(0.12),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: accentColor.withOpacity(0.2), width: 1),
+                Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.black : const Color(0xFFF5F5F4),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFD6D3D1), width: 1.5),
+                        ),
+                        child: Icon(icon, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 18),
                       ),
-                      child: Icon(icon, color: accentColor, size: 18),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      value,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        shadows: [
-                          Shadow(
-                            color: accentColor.withOpacity(0.3),
-                            blurRadius: 6,
-                          ),
-                        ],
+                      const SizedBox(height: 10),
+                      Text(
+                        value,
+                        style: TextStyle(
+                          color: isDark ? Colors.white : const Color(0xFF1C1917),
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      label.toUpperCase(),
-                      style: const TextStyle(
-                        color: Color(0xFF94A3B8),
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.0,
+                      const SizedBox(height: 3),
+                      Text(
+                        label.toUpperCase(),
+                        style: TextStyle(
+                          color: isDark ? Colors.grey : const Color(0xFF78716C),
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.0,
+                        ),
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      textAlign: TextAlign.center,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildHeroActionCard(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.08), width: 1),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            const Color(0xFF818CF8).withOpacity(0.18),
-            const Color(0xFFC084FC).withOpacity(0.06),
-          ],
-        ),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: Stack(
-          children: [
-            Positioned(
-              right: -30,
-              bottom: -30,
-              child: Container(
-                width: 140,
-                height: 140,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF818CF8).withOpacity(0.12),
-                ),
-              ),
-            ),
-            Positioned(
-              left: -40,
-              top: -40,
-              child: Container(
-                width: 100,
-                height: 100,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFFC084FC).withOpacity(0.12),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF818CF8).withOpacity(0.15),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0xFF818CF8).withOpacity(0.3), width: 1.2),
-                        ),
-                        child: const Icon(
-                          Icons.auto_awesome,
-                          color: Color(0xFFA5B4FC),
-                          size: 20,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      const Text(
-                        "Empower Your City",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    "Report local issues, track maintenance in real-time, and build a smarter community together.",
-                    style: TextStyle(
-                      color: Color(0xFFCBD5E1),
-                      fontSize: 13,
-                      height: 1.5,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    child: Container(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), width: 1.5),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                        ),
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF6366F1).withOpacity(0.35),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
-                          )
-                        ],
+                        color: isDark ? Colors.black : const Color(0xFFF5F5F4),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFD6D3D1), width: 1.5),
                       ),
-                      child: ElevatedButton.icon(
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const CitizenReportScreen()),
-                        ),
-                        icon: const Icon(Icons.add_circle_outline_rounded, color: Colors.white),
-                        label: const Text(
-                          "Report an Issue",
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          shadowColor: Colors.transparent,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        ),
+                      child: Icon(
+                        Icons.auto_awesome,
+                        color: isDark ? Colors.white : const Color(0xFF0D9488),
+                        size: 20,
                       ),
                     ),
+                    const SizedBox(width: 12),
+                    Text(
+                      "Empower Your City",
+                      style: TextStyle(
+                        color: isDark ? Colors.white : const Color(0xFF1C1917),
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  "Report local issues, track maintenance in real-time, and build a smarter community together.",
+                  style: TextStyle(
+                    color: isDark ? const Color(0xFFCCCCCC) : const Color(0xFF44403C),
+                    fontSize: 13,
+                    height: 1.5,
                   ),
-                ],
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: () async {
+                      final result = await Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const CitizenReportScreen()),
+                      );
+                      if (result == true) {
+                        _fetchDashboardData();
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
+                      foregroundColor: isDark ? Colors.black : Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    icon: Icon(Icons.add_circle_outline_rounded, color: isDark ? Colors.black : Colors.white),
+                    label: Text(
+                      "Report an Issue",
+                      style: TextStyle(color: isDark ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Positioned(
+          right: -10,
+          bottom: -10,
+          child: IgnorePointer(
+            child: Opacity(
+              opacity: isDark ? 0.08 : 0.05,
+              child: Icon(
+                Icons.location_city_rounded,
+                size: 130,
+                color: isDark ? Colors.white : const Color(0xFF1C1917),
               ),
             ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
   Widget _buildHeroWorkerCard(BuildContext context, int taskCount) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.08), width: 1),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            const Color(0xFFF59E0B).withOpacity(0.18),
-            const Color(0xFFEF4444).withOpacity(0.06),
-          ],
-        ),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: Stack(
-          children: [
-            Positioned(
-              right: -30,
-              bottom: -30,
-              child: Container(
-                width: 140,
-                height: 140,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFFF59E0B).withOpacity(0.12),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), width: 1.5),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.black : const Color(0xFFF5F5F4),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFD6D3D1), width: 1.5),
+                      ),
+                      child: Icon(
+                        Icons.engineering_rounded,
+                        color: isDark ? Colors.white : const Color(0xFF0D9488),
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      "Worker Workspace",
+                      style: TextStyle(
+                        color: isDark ? Colors.white : const Color(0xFF1C1917),
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+                const SizedBox(height: 14),
+                Text(
+                  taskCount > 0 
+                    ? "You have $taskCount active task(s) assigned. Check recent reports below to update progress or upload proof of completion."
+                    : "No active tasks assigned at the moment. Good work! Tap refresh to fetch new dispatches.",
+                  style: TextStyle(
+                    color: isDark ? const Color(0xFFCCCCCC) : const Color(0xFF44403C),
+                    fontSize: 13,
+                    height: 1.5,
+                  ),
+                ),
+                if (taskCount > 0) ...[
+                  const SizedBox(height: 16),
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(10),
+                        width: 8,
+                        height: 8,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF59E0B).withOpacity(0.15),
+                          color: isDark ? Colors.white : const Color(0xFFDC2626),
                           shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.3), width: 1.2),
-                        ),
-                        child: const Icon(
-                          Icons.engineering_rounded,
-                          color: Color(0xFFFBBF24),
-                          size: 20,
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      const Text(
-                        "Worker Workspace",
+                      const SizedBox(width: 8),
+                      Text(
+                        "Requires Maintenance Action",
                         style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
+                          color: isDark ? Colors.white : const Color(0xFFDC2626),
+                          fontSize: 11,
                           fontWeight: FontWeight.bold,
-                          letterSpacing: -0.5,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 14),
-                  Text(
-                    taskCount > 0 
-                      ? "You have $taskCount active task(s) assigned. Check recent reports below to update progress or upload proof of completion."
-                      : "No active tasks assigned at the moment. Good work! Tap refresh to fetch new dispatches.",
-                    style: const TextStyle(
-                      color: Color(0xFFCBD5E1),
-                      fontSize: 13,
-                      height: 1.5,
-                    ),
-                  ),
-                  if (taskCount > 0) ...[
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFFEF4444),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Text(
-                          "Requires Maintenance Action",
-                          style: TextStyle(
-                            color: Color(0xFFF87171),
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
                 ],
+              ],
+            ),
+          ),
+        ),
+        Positioned(
+          right: -10,
+          bottom: -10,
+          child: IgnorePointer(
+            child: Opacity(
+              opacity: isDark ? 0.08 : 0.05,
+              child: Icon(
+                Icons.engineering_rounded,
+                size: 130,
+                color: isDark ? Colors.white : const Color(0xFF1C1917),
               ),
             ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -1232,6 +1288,7 @@ class _DashboardContentState extends State<DashboardContent> {
   }
 
   Widget _buildReportCard(Map<String, dynamic> item) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final cat = item['categories'] ?? 'Unknown';
     final timeAgo = _formatTime(item['timestamp']);
     final status = item['status'] ?? ReportStatus.pending;
@@ -1240,11 +1297,12 @@ class _DashboardContentState extends State<DashboardContent> {
         ? item['description']
         : 'Issue Reported';
 
+    final isLowPriority = status == ReportStatus.resolved || status == ReportStatus.rejected;
     final priority = (cat.contains('Damage') ||
             cat.contains('Drainage') ||
             cat.contains('Tree'))
-        ? (status == ReportStatus.resolved ? 'Low' : 'High')
-        : (status == ReportStatus.resolved ? 'Low' : 'Medium');
+        ? (isLowPriority ? 'Low' : 'High')
+        : (isLowPriority ? 'Low' : 'Medium');
 
     Color priorityColor;
     if (priority == 'High') {
@@ -1290,10 +1348,10 @@ class _DashboardContentState extends State<DashboardContent> {
                           Expanded(
                             child: Text(
                               cat,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 15,
-                                  color: Colors.white),
+                                  color: isDark ? Colors.white : const Color(0xFF1C1917)),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -1314,7 +1372,7 @@ class _DashboardContentState extends State<DashboardContent> {
                       ),
                       const SizedBox(height: 2),
                       Text(timeAgo,
-                          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.w500)),
+                          style: TextStyle(color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 11, fontWeight: FontWeight.w500)),
                     ],
                   ),
                 ),
@@ -1323,8 +1381,8 @@ class _DashboardContentState extends State<DashboardContent> {
             const SizedBox(height: 12),
             Text(
               description,
-              style: const TextStyle(
-                  color: Color(0xFFE2E8F0), fontSize: 13, height: 1.4),
+              style: TextStyle(
+                  color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF44403C), fontSize: 13, height: 1.4),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
@@ -1384,14 +1442,18 @@ class _DashboardContentState extends State<DashboardContent> {
       );
     }
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return GlassCard(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             "City Issue Overview",
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+            style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+                color: isDark ? Colors.white : const Color(0xFF1C1917)),
           ),
           const SizedBox(height: 20),
           ...lines,
@@ -1401,62 +1463,58 @@ class _DashboardContentState extends State<DashboardContent> {
   }
 
   Widget _buildProgressLine(String label, double val, Color col) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
               Icon(
                 _getCategoryIcon(label),
                 size: 16,
-                color: col,
+                color: isDark ? Colors.white : const Color(0xFF1C1917),
               ),
               const SizedBox(width: 8),
               Text(
                 label,
-                style: const TextStyle(fontSize: 13, color: Color(0xFFE2E8F0), fontWeight: FontWeight.w600),
+                style: TextStyle(
+                    fontSize: 13,
+                    color: isDark ? Colors.white : const Color(0xFF1C1917),
+                    fontWeight: FontWeight.w600),
               ),
               const Spacer(),
               Text(
                 "${(val * 100).toInt()}%",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: col),
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: isDark ? Colors.white : const Color(0xFF1C1917)),
               ),
             ],
           ),
           const SizedBox(height: 8),
           ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(4),
             child: Stack(
               children: [
                 Container(
-                  height: 8,
-                  color: Colors.white.withOpacity(0.06),
+                  height: 6,
+                  color: isDark ? Colors.white12 : const Color(0xFFE7E5E4),
                 ),
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 600),
                   curve: Curves.easeOut,
                   width: val > 0 ? null : 0,
-                  height: 8,
+                  height: 6,
                   child: FractionallySizedBox(
                     widthFactor: val,
                     alignment: Alignment.centerLeft,
                     child: Container(
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            col.withOpacity(0.6),
-                            col,
-                          ],
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: [
-                          BoxShadow(
-                            color: col.withOpacity(0.35),
-                            blurRadius: 4,
-                            spreadRadius: 0.5,
-                          )
-                        ],
+                        color: isDark ? Colors.white : col,
+                        borderRadius: BorderRadius.circular(4),
                       ),
                     ),
                   ),
@@ -1481,4 +1539,80 @@ class _StatusConfig {
     required this.icon,
     required this.label,
   });
+}
+
+class SmoothIndexedStack extends StatefulWidget {
+  final int index;
+  final List<Widget> children;
+  final Duration duration;
+
+  const SmoothIndexedStack({
+    super.key,
+    required this.index,
+    required this.children,
+    this.duration = const Duration(milliseconds: 300),
+  });
+
+  @override
+  State<SmoothIndexedStack> createState() => _SmoothIndexedStackState();
+}
+
+class _SmoothIndexedStackState extends State<SmoothIndexedStack>
+    with TickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _fadeAnimation;
+  late Animation<Offset> _slideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: widget.duration,
+    );
+
+    _fadeAnimation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeInOut,
+    );
+
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0.0, 0.02), // subtle lift transition
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+    ));
+
+    _controller.forward();
+  }
+
+  @override
+  void didUpdateWidget(SmoothIndexedStack oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index) {
+      _controller.reset();
+      _controller.forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: SlideTransition(
+        position: _slideAnimation,
+        child: IndexedStack(
+          index: widget.index,
+          children: widget.children,
+        ),
+      ),
+    );
+  }
 }

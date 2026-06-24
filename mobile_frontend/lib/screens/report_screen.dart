@@ -37,6 +37,7 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   // ── AI result ─────────────────────────────────────────────────────────────
   String? _confidence;
   String? _aiRawResult;
+  String? _gradcamUrl;
 
   // ── Form ──────────────────────────────────────────────────────────────────
   final _formKey = GlobalKey<FormState>();
@@ -151,14 +152,20 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       _selectedCategories.clear();
       _confidence  = null;
       _aiRawResult = null;
+      _gradcamUrl  = null;
     });
 
     await _classifyImage(picked);
   }
 
   void _showImageSourceDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    final surfaceColor = isDark ? const Color(0xFF0F0F0F) : Colors.white;
+
     showModalBottomSheet(
       context: context,
+      backgroundColor: surfaceColor,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => SafeArea(
@@ -166,16 +173,22 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.photo_library_outlined, color: Color(0xFF818CF8)),
-              title: const Text('Choose from Gallery'),
+              leading: Icon(Icons.photo_library_outlined, color: primaryColor),
+              title: Text(
+                'Choose from Gallery',
+                style: TextStyle(color: primaryColor, fontWeight: FontWeight.w500),
+              ),
               onTap: () {
                 Navigator.pop(context);
                 _pickImageFrom(ImageSource.gallery);
               },
             ),
             ListTile(
-              leading: const Icon(Icons.camera_alt_outlined, color: Color(0xFF818CF8)),
-              title: const Text('Take a Photo'),
+              leading: Icon(Icons.camera_alt_outlined, color: primaryColor),
+              title: Text(
+                'Take a Photo',
+                style: TextStyle(color: primaryColor, fontWeight: FontWeight.w500),
+              ),
               onTap: () {
                 Navigator.pop(context);
                 _pickImageFrom(ImageSource.camera);
@@ -202,39 +215,87 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(await response.stream.bytesToString());
-        final raw = decoded['issue_type'].toString().toLowerCase().trim().replaceAll('_', ' ');
-        final conf = double.tryParse(
-            decoded['confidence'].toString().replaceAll('%', '')) ?? 0.0;
-
+        
         setState(() {
           _confidence  = decoded['confidence'];
           _aiRawResult = decoded['issue_type'];
+          _gradcamUrl  = decoded['gradcam_url'];
           _selectedCategories.clear();
 
-          if (conf > 70.0) {
-            if (raw.contains('pothole') || raw.contains('sidewalk') ||
-                raw.contains('fallen tree') || raw.contains('road sign') ||
-                raw.contains('vandalism') || raw.contains('vegetation')) {
-              _selectedCategories.add('Road Damage');
-            }
-            if (raw.contains('drainage') || raw.contains('water')) {
-              _selectedCategories.add('Drainage');
-            }
-            if (raw.contains('dumping') || raw.contains('burning') ||
-                raw.contains('waste')) {
-              _selectedCategories.add('Waste Management');
-            }
-            if (raw.contains('street light')) {
-              _selectedCategories.add('Street Lighting');
-            }
-            if (raw.contains('normal')) {
-              _selectedCategories.add('Normal');
-            }
-            if (raw.contains('other') || _selectedCategories.isEmpty) {
-              if (!_selectedCategories.contains('Other')) {
-                _selectedCategories.add('Other');
+          // 1. Process multi-label predictions if present
+          if (decoded['predictions'] != null) {
+            final preds = decoded['predictions'] as List<dynamic>;
+            for (var pred in preds) {
+              final String label = pred['issue_type'].toString().toLowerCase().trim().replaceAll('_', ' ');
+              final double conf = double.tryParse(
+                  pred['confidence'].toString().replaceAll('%', '')) ?? 0.0;
+
+              // Only auto-select categories that cross our 35% threshold
+              if (conf >= 35.0) {
+                if (label.contains('pothole') || label.contains('sidewalk') ||
+                    label.contains('fallen tree') || label.contains('road sign') ||
+                    label.contains('vandalism') || label.contains('vegetation')) {
+                  if (!_selectedCategories.contains('Road Damage')) {
+                    _selectedCategories.add('Road Damage');
+                  }
+                }
+                if (label.contains('drainage') || label.contains('water')) {
+                  if (!_selectedCategories.contains('Drainage')) {
+                    _selectedCategories.add('Drainage');
+                  }
+                }
+                if (label.contains('dumping') || label.contains('burning') ||
+                    label.contains('waste')) {
+                  if (!_selectedCategories.contains('Waste Management')) {
+                    _selectedCategories.add('Waste Management');
+                  }
+                }
+                if (label.contains('street light')) {
+                  if (!_selectedCategories.contains('Street Lighting')) {
+                    _selectedCategories.add('Street Lighting');
+                  }
+                }
+                if (label.contains('normal')) {
+                  if (!_selectedCategories.contains('Normal')) {
+                    _selectedCategories.add('Normal');
+                  }
+                }
               }
             }
+          }
+
+          // 2. Fallback to old single-label parsing if predictions list is missing
+          // or if no predictions crossed the threshold
+          if (_selectedCategories.isEmpty) {
+            final raw = decoded['issue_type'].toString().toLowerCase().trim().replaceAll('_', ' ');
+            final conf = double.tryParse(
+                decoded['confidence'].toString().replaceAll('%', '')) ?? 0.0;
+
+            if (conf > 50.0) {
+              if (raw.contains('pothole') || raw.contains('sidewalk') ||
+                  raw.contains('fallen tree') || raw.contains('road sign') ||
+                  raw.contains('vandalism') || raw.contains('vegetation')) {
+                _selectedCategories.add('Road Damage');
+              }
+              if (raw.contains('drainage') || raw.contains('water')) {
+                _selectedCategories.add('Drainage');
+              }
+              if (raw.contains('dumping') || raw.contains('burning') ||
+                  raw.contains('waste')) {
+                _selectedCategories.add('Waste Management');
+              }
+              if (raw.contains('street light')) {
+                _selectedCategories.add('Street Lighting');
+              }
+              if (raw.contains('normal')) {
+                _selectedCategories.add('Normal');
+              }
+            }
+          }
+
+          // 3. Default fallback if still empty
+          if (_selectedCategories.isEmpty) {
+            _selectedCategories.add('Other');
           }
         });
       }
@@ -346,9 +407,13 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   void _showSnack(String message, {required bool isError}) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(message),
-      backgroundColor: isError ? Colors.redAccent : Colors.green,
+      content: Text(
+        message,
+        style: TextStyle(color: isDark && !isError ? Colors.black : Colors.white, fontWeight: FontWeight.w500),
+      ),
+      backgroundColor: isError ? const Color(0xFFEF4444) : (isDark ? Colors.white : const Color(0xFF0D9488)),
       behavior: SnackBarBehavior.floating,
     ));
   }
@@ -386,6 +451,12 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Future<bool?> _showDuplicateWarningDialog(String address, double distance, int duplicateId) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+    final borderColor = isDark ? Colors.white24 : const Color(0xFFE7E5E4);
+    final surfaceColor = isDark ? const Color(0xFF0F0F0F) : Colors.white;
+
     return showDialog<bool?>(
       context: context,
       barrierDismissible: false,
@@ -394,18 +465,18 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor: const Color(0xFF1E1B4B),
+              backgroundColor: surfaceColor,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: const Color(0xFF818CF8).withOpacity(0.35), width: 1.5),
+                side: BorderSide(color: borderColor, width: 1.5),
               ),
               title: Row(
-                children: const [
-                  Icon(Icons.warning_amber_rounded, color: Color(0xFFF59E0B), size: 24),
-                  SizedBox(width: 8),
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: Color(0xFFF59E0B), size: 24),
+                  const SizedBox(width: 8),
                   Text(
                     "Nearby Report Found",
-                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                    style: TextStyle(color: primaryColor, fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
@@ -413,38 +484,38 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     "Our system detected a similar issue already reported nearby:",
-                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                    style: TextStyle(color: secondaryColor, fontSize: 13),
                   ),
                   const SizedBox(height: 12),
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.04),
+                      color: isDark ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.04),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withOpacity(0.08)),
+                      border: Border.all(color: borderColor),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           "Location: $address",
-                          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                          style: TextStyle(color: primaryColor, fontSize: 13, fontWeight: FontWeight.w500),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           "Distance: ${distance.toStringAsFixed(1)} meters away",
-                          style: const TextStyle(color: Color(0xFFA5B4FC), fontSize: 12, fontWeight: FontWeight.bold),
+                          style: TextStyle(color: primaryColor, fontSize: 12, fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 14),
-                  const Text(
+                  Text(
                     "Would you like to upvote the existing report to help prioritize it, or submit your report anyway?",
-                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                    style: TextStyle(color: secondaryColor, fontSize: 13),
                   ),
                 ],
               ),
@@ -452,7 +523,7 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
               actions: [
                 TextButton(
                   onPressed: upvoting ? null : () => Navigator.pop(context, null),
-                  child: const Text("Cancel", style: TextStyle(color: Color(0xFF94A3B8))),
+                  child: Text("Cancel", style: TextStyle(color: secondaryColor)),
                 ),
                 TextButton(
                   onPressed: upvoting ? null : () => Navigator.pop(context, false),
@@ -480,8 +551,8 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                           }
                         },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF6366F1),
-                    foregroundColor: Colors.white,
+                    backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
+                    foregroundColor: isDark ? Colors.black : Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                   child: upvoting
@@ -503,6 +574,9 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   // ── BUILD ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
+
     return BackgroundDecorator(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -510,12 +584,12 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           backgroundColor: Colors.transparent,
           elevation: 0,
           scrolledUnderElevation: 0.5,
-          title: const Text(
+          title: Text(
             "Report an Issue",
             style: TextStyle(
-                color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                color: primaryColor, fontWeight: FontWeight.bold, fontSize: 18),
           ),
-          iconTheme: const IconThemeData(color: Colors.white),
+          iconTheme: IconThemeData(color: primaryColor),
         ),
         body: Form(
           key: _formKey,
@@ -551,19 +625,24 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildSectionHeader(String title, IconData icon, String stepNumber) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+    final borderColor = isDark ? Colors.white24 : const Color(0xFFE7E5E4);
+
     return Row(
       children: [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            color: const Color(0xFF818CF8).withOpacity(0.12),
+            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.06),
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: const Color(0xFF818CF8).withOpacity(0.25)),
+            border: Border.all(color: borderColor),
           ),
           child: Text(
             stepNumber,
-            style: const TextStyle(
-              color: Color(0xFF818CF8),
+            style: TextStyle(
+              color: primaryColor,
               fontWeight: FontWeight.bold,
               fontSize: 10,
               letterSpacing: 0.5,
@@ -571,13 +650,13 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           ),
         ),
         const SizedBox(width: 10),
-        Icon(icon, size: 16, color: const Color(0xFF94A3B8)),
+        Icon(icon, size: 16, color: secondaryColor),
         const SizedBox(width: 6),
         Text(
           title,
-          style: const TextStyle(
+          style: TextStyle(
               fontWeight: FontWeight.bold,
-              color: Color(0xFF94A3B8),
+              color: secondaryColor,
               fontSize: 11,
               letterSpacing: 1.1),
         ),
@@ -586,6 +665,10 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildImagePicker() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+
     return GestureDetector(
       onTap: _showImageSourceDialog,
       child: GlassCard(
@@ -597,14 +680,14 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           child: _image == null
               ? Column(
                   mainAxisAlignment: MainAxisAlignment.center,
-                  children: const [
-                    Icon(Icons.add_a_photo_outlined, size: 40, color: Color(0xFF818CF8)),
-                    SizedBox(height: 10),
+                  children: [
+                    Icon(Icons.add_a_photo_outlined, size: 40, color: primaryColor),
+                    const SizedBox(height: 10),
                     Text("Tap to add evidence photo",
-                        style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
-                    SizedBox(height: 4),
+                        style: TextStyle(color: primaryColor, fontSize: 13, fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 4),
                     Text("Supports camera & gallery",
-                        style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11)),
+                        style: TextStyle(color: secondaryColor, fontSize: 11)),
                   ],
                 )
               : ClipRRect(
@@ -612,9 +695,14 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      kIsWeb
-                          ? Image.memory(_imageBytes!, fit: BoxFit.cover)
-                          : Image.file(_image!, fit: BoxFit.cover),
+                      _gradcamUrl != null
+                          ? Image.network(
+                              '${ApiService.baseUrl}${_gradcamUrl!.startsWith('/') ? _gradcamUrl! : '/$_gradcamUrl'}',
+                              fit: BoxFit.cover,
+                            )
+                          : (kIsWeb
+                              ? Image.memory(_imageBytes!, fit: BoxFit.cover)
+                              : Image.file(_image!, fit: BoxFit.cover)),
                       if (_isAnalyzing)
                         Container(
                           color: Colors.black45,
@@ -632,8 +720,15 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
 
   Widget _buildAIAnalysisCard() {
     if (_image == null) return const SizedBox.shrink();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final isNormal = _selectedCategories.contains('Normal');
-    final activeColor = isNormal ? const Color(0xFF34D399) : const Color(0xFF818CF8);
+    final activeColor = isNormal
+        ? (isDark ? const Color(0xFF34D399) : const Color(0xFF059669))
+        : (isDark ? Colors.white : const Color(0xFF0D9488));
+
+    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+    final dividerColor = isDark ? Colors.white12 : Colors.black12;
 
     return GlassCard(
       margin: const EdgeInsets.only(top: 20),
@@ -664,20 +759,20 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
+                      children: [
                         Text(
                           "AI COMPUTER VISION SCANNING",
                           style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 10,
-                              color: Color(0xFFA5B4FC),
+                              color: primaryColor,
                               letterSpacing: 1.0),
                         ),
-                        SizedBox(height: 3),
+                        const SizedBox(height: 3),
                         Text(
                           "Analyzing image features & infrastructure hazards...",
                           style: TextStyle(
-                              color: Color(0xFF94A3B8),
+                              color: secondaryColor,
                               fontSize: 12,
                               fontWeight: FontWeight.w400),
                         ),
@@ -698,12 +793,12 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                           color: activeColor,
                           size: 20),
                       const SizedBox(width: 8),
-                      const Text(
+                      Text(
                         "AI COMPUTER VISION SCAN",
                         style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 11,
-                            color: Colors.white,
+                            color: primaryColor,
                             letterSpacing: 1.0),
                       ),
                       const Spacer(),
@@ -711,39 +806,33 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [activeColor, activeColor.withOpacity(0.7)],
-                            ),
+                            color: isDark ? Colors.black : Colors.white,
                             borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: activeColor.withOpacity(0.35),
-                                blurRadius: 10,
-                                offset: const Offset(0, 2),
-                              )
-                            ],
+                            border: Border.all(
+                                color: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
+                                width: 1.5),
                           ),
                           child: Text(
                             "$_confidence MATCH",
-                            style: const TextStyle(
+                            style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 10,
-                                color: Colors.white,
+                                color: primaryColor,
                                 letterSpacing: 0.8),
                           ),
                         ),
                     ],
                   ),
-                  const Divider(height: 24, color: Colors.white12),
+                  Divider(height: 24, color: dividerColor),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Text(
+                      Text(
                         "Detected Issue:  ",
                         style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w500,
-                            color: Color(0xFF94A3B8)),
+                            color: secondaryColor),
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -767,19 +856,19 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Text(
+                      Text(
                         "Auto-selected Category:  ",
                         style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w500,
-                            color: Color(0xFF94A3B8)),
+                            color: secondaryColor),
                       ),
                       Text(
                         _selectedCategories.isEmpty ? 'Manual Selection' : _selectedCategories.join(', '),
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
-                            color: Colors.white),
+                            color: primaryColor),
                       ),
                     ],
                   ),
@@ -804,88 +893,106 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildCategoryGrid() {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: _categories.map((cat) {
-        final isSelected = _selectedCategories.contains(cat['name'] as String);
-        final iconColor  = cat['iconColor'] as Color;
-        return GestureDetector(
-          onTap: () {
-            setState(() {
-              final name = cat['name'] as String;
-              if (_selectedCategories.contains(name)) {
-                _selectedCategories.remove(name);
-              } else {
-                _selectedCategories.add(name);
-              }
-            });
-          },
-          child: GlassCard(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            borderRadius: BorderRadius.circular(14),
-            borderColor: isSelected ? iconColor : Colors.white.withOpacity(0.12),
-            color: isSelected ? iconColor.withOpacity(0.1) : Colors.white.withOpacity(0.05),
-            child: SizedBox(
-              width: (MediaQuery.of(context).size.width - 92) / 2,
-              child: Row(
-                children: [
-                  Icon(cat['icon'] as IconData, color: iconColor, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      cat['name'] as String,
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: isSelected ? Colors.white : const Color(0xFF94A3B8),
-                          fontWeight: isSelected
-                              ? FontWeight.bold
-                              : FontWeight.w500),
-                    ),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+    final borderUnselectedColor = isDark ? Colors.white24 : const Color(0xFFE7E5E4);
+    final surfaceUnselectedColor = isDark ? const Color(0xFF0F0F0F) : Colors.white;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Calculate exact width for two columns including spacing (12) and card decorations (31)
+        final cardSizedBoxWidth = (constraints.maxWidth - 12) / 2 - 31;
+
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: _categories.map((cat) {
+            final isSelected = _selectedCategories.contains(cat['name'] as String);
+            final iconColor  = cat['iconColor'] as Color;
+            return GestureDetector(
+              onTap: () {
+                setState(() {
+                  final name = cat['name'] as String;
+                  if (_selectedCategories.contains(name)) {
+                    _selectedCategories.remove(name);
+                  } else {
+                    _selectedCategories.add(name);
+                  }
+                });
+              },
+              child: GlassCard(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                borderRadius: BorderRadius.circular(14),
+                borderColor: isSelected ? iconColor : borderUnselectedColor,
+                color: isSelected ? iconColor.withOpacity(isDark ? 0.1 : 0.15) : surfaceUnselectedColor,
+                child: SizedBox(
+                  width: cardSizedBoxWidth,
+                  child: Row(
+                    children: [
+                      Icon(cat['icon'] as IconData, color: iconColor, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          cat['name'] as String,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: isSelected ? primaryColor : secondaryColor,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.w500),
+                        ),
+                      ),
+                      if (isSelected)
+                        Icon(Icons.check_circle_rounded, color: iconColor, size: 14),
+                    ],
                   ),
-                  if (isSelected)
-                    Icon(Icons.check_circle_rounded, color: iconColor, size: 14),
-                ],
+                ),
               ),
-            ),
-          ),
+            );
+          }).toList(),
         );
-      }).toList(),
+      },
     );
   }
 
   Widget _buildDescriptionField() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+    final borderColor = isDark ? Colors.white24 : const Color(0xFFE7E5E4);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text(
+            Text(
               "DESCRIPTION",
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
-                color: Color(0xFF94A3B8),
+                color: secondaryColor,
                 letterSpacing: 0.8,
               ),
             ),
             if (_image != null && !_isAnalyzing && _aiRawResult != null)
               TextButton.icon(
                 onPressed: _enhanceDescription,
-                icon: const Icon(Icons.auto_awesome, size: 14, color: Color(0xFFA5B4FC)),
-                label: const Text(
+                icon: Icon(Icons.auto_awesome, size: 14, color: isDark ? Colors.white : const Color(0xFF0D9488)),
+                label: Text(
                   "AI Enhance",
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFFA5B4FC),
+                    color: isDark ? Colors.white : const Color(0xFF0D9488),
                   ),
                 ),
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  backgroundColor: const Color(0xFF818CF8).withOpacity(0.12),
+                  backgroundColor: isDark ? Colors.white.withOpacity(0.12) : const Color(0xFF0D9488).withOpacity(0.12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
               ),
@@ -896,24 +1003,25 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           controller: _descriptionController,
           maxLines: 4,
           maxLength: 500,
-          style: const TextStyle(fontSize: 14, color: Colors.white),
+          style: TextStyle(fontSize: 14, color: primaryColor),
           decoration: InputDecoration(
             hintText: "Describe the issue in detail (e.g. size, exact spot, hazard level)…",
+            hintStyle: TextStyle(color: secondaryColor.withOpacity(0.7)),
             filled: true,
-            fillColor: Colors.white.withOpacity(0.04),
+            fillColor: isDark ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.03),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide(color: Colors.white.withOpacity(0.12), width: 1.0),
+              borderSide: BorderSide(color: borderColor, width: 1.0),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide(color: Colors.white.withOpacity(0.12), width: 1.0),
+              borderSide: BorderSide(color: borderColor, width: 1.0),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: const BorderSide(color: Color(0xFF818CF8), width: 1.5),
+              borderSide: BorderSide(color: isDark ? Colors.white : const Color(0xFF0D9488), width: 1.5),
             ),
-            counterStyle: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+            counterStyle: TextStyle(fontSize: 11, color: secondaryColor),
           ),
           validator: (value) {
             if (value == null || value.trim().isEmpty) {
@@ -927,6 +1035,10 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildLocationPreview() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+
     return GlassCard(
       padding: const EdgeInsets.all(16),
       child: Row(
@@ -935,10 +1047,10 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: const Color(0xFF0EA5E9).withOpacity(0.1),
+              color: isDark ? Colors.white.withOpacity(0.12) : const Color(0xFF0D9488).withOpacity(0.1),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.location_on, color: Color(0xFF0EA5E9), size: 20),
+            child: Icon(Icons.location_on, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -947,14 +1059,14 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
               children: [
                 Text(
                   _address ?? 'Fetching address…',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: primaryColor),
                 ),
                 const SizedBox(height: 4),
                 if (_locationDisplay.isNotEmpty &&
                     _locationDisplay != 'Fetching location…')
                   Text(_locationDisplay,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF94A3B8))),
+                      style: TextStyle(
+                          fontSize: 12, color: secondaryColor)),
               ],
             ),
           ),
@@ -964,42 +1076,30 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildSubmitButton() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return SizedBox(
       height: 54,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-              colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)]),
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF6366F1).withOpacity(0.3),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            )
-          ],
+      width: double.infinity,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
+          foregroundColor: isDark ? Colors.black : Colors.white,
+          disabledBackgroundColor: isDark ? Colors.white38 : const Color(0xFF0D9488).withOpacity(0.5),
+          disabledForegroundColor: isDark ? Colors.black54 : Colors.white70,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         ),
-        child: ElevatedButton(
-          onPressed: _isAnalyzing || _isSubmitting ? null : _submitReport,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14)),
-          ),
-          child: _isSubmitting
-              ? const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2.5))
-              : const Text("SUBMIT REPORT",
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      letterSpacing: 0.8,
-                      fontWeight: FontWeight.bold)),
-        ),
+        onPressed: _isAnalyzing || _isSubmitting ? null : _submitReport,
+        child: _isSubmitting
+            ? SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                    color: isDark ? Colors.black : Colors.white, strokeWidth: 2.5))
+            : const Text("SUBMIT REPORT",
+                style: TextStyle(
+                    fontSize: 15,
+                    letterSpacing: 0.8,
+                    fontWeight: FontWeight.bold)),
       ),
     );
   }

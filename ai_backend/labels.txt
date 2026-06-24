@@ -9,4 +9,3 @@
 8 Road_Sign
 9 Street_Light
 10 Vandalism
-11 other

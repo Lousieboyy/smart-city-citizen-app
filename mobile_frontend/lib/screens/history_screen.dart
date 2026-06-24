@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../services/api_service.dart';
@@ -20,6 +21,7 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen> {
   List<dynamic> _reports = [];
   bool _isLoading = true;
+  Timer? _refreshTimer;
 
   final _statusOptions = ['All', ...ReportStatus.all];
   String _filterStatus = 'All';
@@ -31,9 +33,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
   void initState() {
     super.initState();
     _fetchReports();
+
+    // Auto-refresh history every 30 seconds silently in the background
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        _fetchReports(silent: true);
+      }
+    });
   }
 
-  Future<void> _fetchReports() async {
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetchReports({bool silent = false}) async {
     final session = UserSession.instance;
     if (!session.isLoggedIn) {
       if (!mounted) return;
@@ -45,7 +60,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       return;
     }
 
-    setState(() => _isLoading = true);
+    if (!silent) setState(() => _isLoading = true);
 
     try {
       final response = await ApiService.getReports(
@@ -144,16 +159,35 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  /// Neon accent per category — mirrors the map pin colors
+  Color _getCategoryNeonColor(String category) {
+    final cat = category.toLowerCase();
+    if (cat.contains('road') || cat.contains('damage')) {
+      return const Color(0xFFFF6B35); // Neon orange
+    } else if (cat.contains('light') || cat.contains('lamp')) {
+      return const Color(0xFFFFE135); // Neon yellow
+    } else if (cat.contains('waste') || cat.contains('trash') || cat.contains('rubbish')) {
+      return const Color(0xFF39FF14); // Neon green
+    } else if (cat.contains('drain') || cat.contains('water')) {
+      return const Color(0xFF00CFFF); // Neon cyan
+    } else if (cat.contains('noise')) {
+      return const Color(0xFFDA00FF); // Neon purple
+    } else {
+      return const Color(0xFFFF2D78); // Neon pink
+    }
+  }
+
   Widget _build3DPin(String category, _StatusConfig cfg, {int upvotes = 0}) {
     final double sizeMultiplier = 1.0 + math.min(upvotes * 0.10, 0.40);
     final double baseWidth = 24.0 * sizeMultiplier;
     final double baseHeight = 24.0 * sizeMultiplier;
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final Color glowColor = upvotes >= 5
         ? const Color(0xFFF59E0B) // Amber gold for high votes
         : upvotes >= 2
             ? const Color(0xFFEC4899) // Hot pink for trending votes
-            : const Color(0xFFA5B4FC); // Standard Indigo
+            : (isDark ? Colors.white : const Color(0xFF1C1917));
 
     return SizedBox(
       width: 36 * sizeMultiplier,
@@ -196,7 +230,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     width: baseWidth,
                     height: baseHeight,
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.85),
+                      color: isDark ? Colors.black.withOpacity(0.85) : const Color(0xFFF5F5F4),
                       borderRadius: const BorderRadius.only(
                         topLeft: Radius.circular(12),
                         topRight: Radius.circular(12),
@@ -224,7 +258,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       angle: -math.pi / 4,
                       child: Icon(
                         _getCategoryIcon(category),
-                        color: Colors.white,
+                        color: isDark ? Colors.white : const Color(0xFF1C1917),
                         size: 13 * sizeMultiplier,
                       ),
                     ),
@@ -291,8 +325,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
             label: 'Resolved');
       case ReportStatus.inMaintenance:
         return const _StatusConfig(
-            color: Color(0xFF7C3AED),
-            bg: Color(0xFFF5F3FF),
+            color: const Color(0xFF0EA5E9),
+            bg: const Color(0xFFF0F9FF),
             icon: Icons.construction_rounded,
             label: 'In Maintenance');
       case ReportStatus.inProcess:
@@ -307,6 +341,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
             bg: Color(0xFFEFF6FF),
             icon: Icons.rate_review_rounded,
             label: 'In Review');
+      case ReportStatus.rejected:
+        return const _StatusConfig(
+            color: Color(0xFFEF4444),
+            bg: Color(0xFFFEF2F2),
+            icon: Icons.cancel_rounded,
+            label: 'Rejected');
       default:
         return const _StatusConfig(
             color: Color(0xFFDC2626),
@@ -326,16 +366,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
         scrolledUnderElevation: 0.5,
         centerTitle: false,
         automaticallyImplyLeading: false,
-        title: const Text(
+        title: Text(
           'My Reports',
           style: TextStyle(
-              color: Colors.white,
+              color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917),
               fontWeight: FontWeight.bold,
               fontSize: 22),
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF818CF8)),
+            icon: Icon(Icons.refresh_rounded, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917)),
             tooltip: 'Refresh',
             onPressed: _fetchReports,
           ),
@@ -353,12 +393,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
               runSpacing: 8,
               children: _statusOptions.map((status) {
                 final isSelected = _filterStatus == status;
+                final isDark = Theme.of(context).brightness == Brightness.dark;
                 final Color chipBg = isSelected 
-                    ? const Color(0xFF818CF8).withOpacity(0.22)
-                    : Colors.white.withOpacity(0.04);
+                    ? (isDark ? Colors.white : const Color(0xFF0D9488))
+                    : (isDark ? Colors.black : const Color(0xFFF5F5F4));
                 final Color chipBorder = isSelected
-                    ? const Color(0xFFA5B4FC).withOpacity(0.7)
-                    : Colors.white.withOpacity(0.08);
+                    ? (isDark ? Colors.white : const Color(0xFF0D9488))
+                    : (isDark ? Colors.white24 : const Color(0xFFD6D3D1));
+                final Color chipTextColor = isSelected
+                    ? (isDark ? Colors.black : Colors.white)
+                    : (isDark ? Colors.grey : const Color(0xFF78716C));
 
                 return GestureDetector(
                   onTap: () => setState(() => _filterStatus = status),
@@ -379,7 +423,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+                        color: chipTextColor,
                       ),
                     ),
                   ),
@@ -391,11 +435,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
           // Report list
           Expanded(
             child: _isLoading
-                ? const Center(
-                    child: CircularProgressIndicator(color: Color(0xFF818CF8)))
+                ? Center(
+                    child: CircularProgressIndicator(color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0D9488)))
                 : RefreshIndicator(
                     onRefresh: _fetchReports,
-                    color: const Color(0xFF818CF8),
+                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0D9488),
                     child: _filteredReports.isEmpty
                         ? ListView(
                             children: [
@@ -434,6 +478,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Widget _buildHistoryCard(Map<String, dynamic> item) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final id = item['id'] as int? ?? 0;
     final status = item['status'] ?? ReportStatus.pending;
     final cfg    = _getStatusConfig(status);
@@ -489,10 +534,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             Expanded(
                               child: Text(
                                 item['categories'] ?? 'Unknown Issue',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 16,
-                                    color: Colors.white),
+                                    color: isDark ? Colors.white : const Color(0xFF1C1917)),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -536,7 +581,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         ),
                         const SizedBox(height: 2),
                         Text(_formatTime(item['timestamp']),
-                            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.w500)),
+                            style: TextStyle(color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 11, fontWeight: FontWeight.w500)),
                       ],
                     ),
                   ),
@@ -547,8 +592,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
               // Description
               Text(
                 item['description'] ?? 'No description provided',
-                style: const TextStyle(
-                    color: Color(0xFFE2E8F0), fontSize: 13, height: 1.4),
+                style: TextStyle(
+                    color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF44403C), fontSize: 13, height: 1.4),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -557,13 +602,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
               // Location
               Row(
                 children: [
-                  const Icon(Icons.location_on_outlined, size: 14, color: Color(0xFF94A3B8)),
+                  Icon(Icons.location_on_outlined, size: 14, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       displayAddress,
-                      style: const TextStyle(
-                          color: Color(0xFF94A3B8), fontSize: 12),
+                      style: TextStyle(
+                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 12),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -577,8 +622,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 _buildInfoChip(
                   icon: Icons.auto_awesome,
                   label: 'AI Match: ${item['ai_prediction']} (${item['confidence'] ?? ''})',
-                  color: const Color(0xFF818CF8),
-                  bg: const Color(0xFF818CF8),
+                  color: isDark ? Colors.white : const Color(0xFF0D9488),
+                  bg: isDark ? Colors.white : const Color(0xFF0D9488),
                 ),
               ],
 
@@ -588,8 +633,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 _buildInfoChip(
                   icon: Icons.business_rounded,
                   label: 'Department: ${item['assigned_department']}',
-                  color: const Color(0xFF38BDF8),
-                  bg: const Color(0xFF38BDF8),
+                  color: isDark ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
+                  bg: isDark ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
                 ),
               ],
 
@@ -599,8 +644,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 _buildInfoChip(
                   icon: Icons.engineering_rounded,
                   label: 'Assigned Worker: ${item['assigned_worker']}',
-                  color: const Color(0xFFC084FC),
-                  bg: const Color(0xFFC084FC),
+                  color: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
+                  bg: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
                 ),
               ],
 
@@ -611,9 +656,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.03),
+                    color: isDark ? Colors.white.withOpacity(0.03) : const Color(0xFFF5F5F4),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    border: Border.all(color: isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFE7E5E4)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -636,17 +681,29 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           .map((line) {
                         final isAuth  = line.startsWith('[Authority]');
                         final isAdmin = line.startsWith('[Admin]');
-                        Color bubbleColor = Colors.white.withOpacity(0.04);
-                        Color txtColor = const Color(0xFFE2E8F0);
-                        Color borderColor = Colors.white.withOpacity(0.08);
-                        if (isAuth) {
-                          bubbleColor = const Color(0xFF059669).withOpacity(0.1);
-                          txtColor = const Color(0xFF34D399); // emerald-400
-                          borderColor = const Color(0xFF059669).withOpacity(0.2);
-                        } else if (isAdmin) {
-                          bubbleColor = const Color(0xFF2563EB).withOpacity(0.1);
-                          txtColor = const Color(0xFF60A5FA); // blue-400
-                          borderColor = const Color(0xFF2563EB).withOpacity(0.2);
+                        Color bubbleColor = isDark ? Colors.white.withOpacity(0.04) : const Color(0xFFF5F5F4);
+                        Color txtColor = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1C1917);
+                        Color borderColor = isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFE7E5E4);
+                        if (isDark) {
+                          if (isAuth) {
+                            bubbleColor = const Color(0xFF059669).withOpacity(0.1);
+                            txtColor = const Color(0xFF34D399); // emerald-400
+                            borderColor = const Color(0xFF059669).withOpacity(0.2);
+                          } else if (isAdmin) {
+                            bubbleColor = const Color(0xFF2563EB).withOpacity(0.1);
+                            txtColor = const Color(0xFF60A5FA); // blue-400
+                            borderColor = const Color(0xFF2563EB).withOpacity(0.2);
+                          }
+                        } else {
+                          if (isAuth) {
+                            bubbleColor = const Color(0xFFECFDF5);
+                            txtColor = const Color(0xFF047857); // emerald-700
+                            borderColor = const Color(0xFFA7F3D0);
+                          } else if (isAdmin) {
+                            bubbleColor = const Color(0xFFEFF6FF);
+                            txtColor = const Color(0xFF1D4ED8); // blue-700
+                            borderColor = const Color(0xFFBFDBFE);
+                          }
                         }
                         return Container(
                           margin: const EdgeInsets.only(bottom: 6),
@@ -674,7 +731,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               if (item['image_path'] != null) ...[
                 const SizedBox(height: 12),
                 _buildImageThumbnail(
-                    '${ApiService.baseUrl}${item['image_path']}'),
+                    '${ApiService.baseUrl}${item['image_path'].toString().startsWith('/') ? item['image_path'] : '/${item['image_path']}'}'),
               ],
 
               // Worker completion proof
@@ -683,35 +740,35 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.03),
+                    color: isDark ? Colors.white.withOpacity(0.03) : const Color(0xFFF5F5F4),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    border: Border.all(color: isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFE7E5E4)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
-                        children: const [
+                        children: [
                           Icon(Icons.verified_rounded,
-                              size: 14, color: Color(0xFFC084FC)),
-                          SizedBox(width: 6),
+                              size: 14, color: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706)),
+                          const SizedBox(width: 6),
                           Text('Worker Completion Proof',
                               style: TextStyle(
-                                  color: Color(0xFFC084FC),
+                                  color: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
                                   fontWeight: FontWeight.bold,
                                   fontSize: 12)),
                         ],
                       ),
                       const SizedBox(height: 10),
                       _buildImageThumbnail(
-                          '${ApiService.baseUrl}${item['completion_image_path']}',
+                          '${ApiService.baseUrl}${item['completion_image_path'].toString().startsWith('/') ? item['completion_image_path'] : '/${item['completion_image_path']}'}',
                           height: 120),
                       if (item['completion_notes'] != null &&
                           (item['completion_notes'] as String).isNotEmpty) ...[
                         const SizedBox(height: 8),
                         Text(item['completion_notes'],
-                            style: const TextStyle(
-                                color: Color(0xFFE9D5FF), fontSize: 12, fontWeight: FontWeight.w500)),
+                            style: TextStyle(
+                                color: isDark ? const Color(0xFFE9D5FF) : const Color(0xFF44403C), fontSize: 12, fontWeight: FontWeight.w500)),
                       ],
                     ],
                   ),

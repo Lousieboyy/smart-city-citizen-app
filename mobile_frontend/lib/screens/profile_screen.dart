@@ -82,8 +82,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Log Out',
-            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        title: Text('Log Out',
+            style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917))),
         content: const Text('Are you sure you want to log out?'),
         actions: [
           TextButton(
@@ -102,7 +102,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (confirmed != true || !mounted) return;
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
+    await prefs.remove('user_id');
+    await prefs.remove('username');
+    await prefs.remove('role');
+    await prefs.remove('token');
+    await prefs.remove('full_name');
+    await prefs.remove('ic_number');
+    await prefs.remove('phone_number');
+    await prefs.remove('email');
     UserSession.instance.clear();
 
     if (mounted) {
@@ -114,13 +121,96 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<void> _showAvatarSelectionDialog() async {
+    final selectedIndex = await showDialog<int>(
+      context: context,
+      builder: (BuildContext context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+          title: Text(
+            'Choose Avatar',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: isDark ? Colors.white : const Color(0xFF1C1917),
+            ),
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 300,
+            child: GridView.builder(
+              shrinkWrap: true,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+              ),
+              itemCount: 18,
+              itemBuilder: (context, index) {
+                final avatarIdx = index + 1;
+                final avatarPath = 'assets/avatars/avatar_$avatarIdx.png';
+                final isCurrent = UserSession.instance.avatarIndex == avatarIdx ||
+                    (UserSession.instance.avatarIndex == null &&
+                        getAvatarPath(_username) == avatarPath);
+
+                return GestureDetector(
+                  onTap: () => Navigator.pop(context, avatarIdx),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: isCurrent
+                            ? (isDark ? Colors.white : const Color(0xFF0D9488))
+                            : Colors.transparent,
+                        width: 3.0,
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(2.0),
+                      child: ClipOval(
+                        child: Image.asset(
+                          avatarPath,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (selectedIndex != null && mounted) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('avatar_index', selectedIndex);
+      setState(() {
+        UserSession.instance.avatarIndex = selectedIndex;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Avatar updated successfully!'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
       return const Scaffold(
         backgroundColor: Colors.transparent,
         body: Center(
-          child: CircularProgressIndicator(color: Color(0xFF818CF8)),
+          child: CircularProgressIndicator(color: Colors.white),
         ),
       );
     }
@@ -137,51 +227,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Column(
                 children: [
                   Stack(
-                    alignment: Alignment.center,
                     children: [
-                      // Avatar background glow
-                      Container(
-                        width: 70,
-                        height: 70,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF818CF8).withOpacity(0.35),
-                              blurRadius: 20,
-                              spreadRadius: 2,
+                      GestureDetector(
+                        onTap: _showAvatarSelectionDialog,
+                        child: Container(
+                          width: 90,
+                          height: 90,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white,
+                            border: Border.all(
+                              color: Theme.of(context).brightness == Brightness.dark
+                                  ? Colors.white
+                                  : const Color(0xFFD6D3D1),
+                              width: 2.0,
                             ),
-                          ],
+                          ),
+                          child: ClipOval(
+                            child: Image.asset(
+                              getAvatarPath(_username),
+                              fit: BoxFit.cover,
+                            ),
+                          ),
                         ),
                       ),
-                      Container(
-                        width: 90,
-                        height: 90,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF818CF8), Color(0xFFC084FC)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF818CF8).withOpacity(0.3),
-                              blurRadius: 10,
-                              spreadRadius: 1,
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: GestureDetector(
+                          onTap: _showAvatarSelectionDialog,
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Theme.of(context).brightness == Brightness.dark
+                                  ? Colors.white
+                                  : const Color(0xFF0D9488),
+                              border: Border.all(color: Colors.white, width: 1.5),
                             ),
-                          ],
-                          border: Border.all(color: Colors.white.withOpacity(0.35), width: 2.0),
-                        ),
-                        child: Center(
-                          child: Text(
-                            _username.isNotEmpty
-                                ? _username.substring(0, 1).toUpperCase()
-                                : "U",
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 36,
-                                fontWeight: FontWeight.w900),
+                            child: Icon(
+                              Icons.edit,
+                              size: 14,
+                              color: Theme.of(context).brightness == Brightness.dark
+                                  ? Colors.black
+                                  : Colors.white,
+                            ),
                           ),
                         ),
                       ),
@@ -189,22 +279,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 16),
                   Text(_username,
-                      style: const TextStyle(
-                          color: Colors.white,
+                      style: TextStyle(
+                          color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917),
                           fontSize: 22,
                           fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF818CF8).withOpacity(0.18),
+                      color: Theme.of(context).brightness == Brightness.dark ? Colors.black : const Color(0xFFF5F5F4),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: const Color(0xFFA5B4FC).withOpacity(0.35), width: 1.0),
+                      border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? Colors.white30 : const Color(0xFFD6D3D1), width: 1.0),
                     ),
                     child: Text(
                       _role.toUpperCase(),
-                      style: const TextStyle(
-                          color: Color(0xFFE0E7FF),
+                      style: TextStyle(
+                          color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF78716C),
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 1.2),
@@ -219,14 +309,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           context,
                           '$_totalReports',
                           _role.toLowerCase().contains('worker') ? 'Active Tasks' : 'Total Reports',
-                          const Color(0xFF818CF8),
+                          Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0D9488),
                         ),
                         const SizedBox(width: 14),
                         _buildQuickStat(
                           context,
                           '$_resolvedReports',
                           _role.toLowerCase().contains('worker') ? 'Completed' : 'Resolved',
-                          const Color(0xFF34D399),
+                          Theme.of(context).brightness == Brightness.dark ? const Color(0xFF34D399) : const Color(0xFF059669),
                         ),
                       ],
                     ),
@@ -234,6 +324,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ],
               ),
             ),
+
+            // Profile Information section
+            _buildSectionHeader("PROFILE INFORMATION"),
+            _buildMenuCard([
+              _buildMenuItem(
+                Icons.badge_outlined,
+                "Full Name",
+                trailingText: UserSession.instance.fullName.isEmpty
+                    ? "N/A"
+                    : UserSession.instance.fullName,
+              ),
+              _buildMenuItem(
+                Icons.fingerprint_rounded,
+                "IC Number",
+                trailingText: UserSession.instance.icNumber.isEmpty
+                    ? "N/A"
+                    : UserSession.instance.icNumber,
+              ),
+              _buildMenuItem(
+                Icons.phone_outlined,
+                "Phone Number",
+                trailingText: UserSession.instance.phoneNumber.isEmpty
+                    ? "N/A"
+                    : UserSession.instance.phoneNumber,
+              ),
+
+            ]),
 
             // Preferences section
             _buildSectionHeader("PREFERENCES"),
@@ -260,15 +377,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       'Use the History tab at the bottom to view your reports.'),
                   behavior: SnackBarBehavior.floating,
                 ));
-              }),
-              _buildMenuItem(Icons.workspace_premium_outlined, "Citizen Score",
-                  trailingText: _resolvedReports > 5 ? "Gold" : "Silver",
-                  onTap: () {
-                _showInfoDialog(
-                  "Citizen Score",
-                  "You are ranked as ${_resolvedReports > 5 ? 'Gold' : 'Silver'}. "
-                      "Keep reporting and resolving issues to level up!",
-                );
               }),
             ]),
 
@@ -330,67 +438,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Expanded(
       child: Container(
         margin: EdgeInsets.zero,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            // Centered underlay glow
-            Center(
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: accentColor.withOpacity(0.15),
-                      blurRadius: 14,
-                      spreadRadius: 2,
-                    ),
-                  ],
+        child: SizedBox(
+          width: double.infinity,
+          child: GlassCard(
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+            margin: EdgeInsets.zero,
+            borderRadius: BorderRadius.circular(8),
+            borderColor: Theme.of(context).brightness == Brightness.dark ? Colors.white24 : const Color(0xFFE7E5E4),
+            child: Column(
+              children: [
+                Text(
+                  value,
+                  style: TextStyle(
+                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
-              ),
-            ),
-            SizedBox(
-              width: double.infinity,
-              child: GlassCard(
-                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-                margin: EdgeInsets.zero,
-                borderRadius: BorderRadius.circular(16),
-                borderColor: accentColor.withOpacity(0.2),
-                child: Column(
-                  children: [
-                    Text(
-                      value,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        shadows: [
-                          Shadow(
-                            color: accentColor.withOpacity(0.35),
-                            blurRadius: 6,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      label.toUpperCase(),
-                      style: const TextStyle(
-                        color: Color(0xFF94A3B8),
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.8,
-                      ),
-                      textAlign: TextAlign.center,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+                const SizedBox(height: 3),
+                Text(
+                  label.toUpperCase(),
+                  style: TextStyle(
+                    color: Theme.of(context).brightness == Brightness.dark ? Colors.grey : const Color(0xFF78716C),
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.8,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -401,8 +481,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.fromLTRB(24, 24, 20, 10),
       child: Text(title,
-          style: const TextStyle(
-              color: Color(0xFF818CF8),
+          style: TextStyle(
+              color: Theme.of(context).brightness == Brightness.dark ? Colors.white70 : const Color(0xFF78716C),
               fontSize: 11,
               fontWeight: FontWeight.bold,
               letterSpacing: 1.1)),
@@ -425,23 +505,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
       leading: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: const Color(0xFF818CF8).withOpacity(0.1),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF818CF8).withOpacity(0.2), width: 1),
+          color: Theme.of(context).brightness == Brightness.dark ? Colors.black : const Color(0xFFF5F5F4),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? Colors.white24 : const Color(0xFFD6D3D1), width: 1.5),
         ),
-        child: Icon(icon, color: const Color(0xFF818CF8), size: 18),
+        child: Icon(icon, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0D9488), size: 18),
       ),
       title: Text(title,
           style:
-              const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
+              TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917))),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (trailingText != null)
             Text(trailingText,
-                style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13, fontWeight: FontWeight.w500)),
-          const SizedBox(width: 4),
-          const Icon(Icons.chevron_right_rounded, color: Color(0xFF64748B), size: 20),
+                style: TextStyle(color: Theme.of(context).brightness == Brightness.dark ? Colors.grey : const Color(0xFF78716C), fontSize: 13, fontWeight: FontWeight.w500)),
+          if (onTap != null) ...[
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right_rounded, color: Theme.of(context).brightness == Brightness.dark ? Colors.white30 : const Color(0xFFA8A29E), size: 20),
+          ],
         ],
       ),
       onTap: onTap,
@@ -453,8 +535,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       context: context,
       builder: (_) => AlertDialog(
         title: Text(title,
-            style: const TextStyle(
-                fontWeight: FontWeight.bold, color: Colors.white)),
+            style: TextStyle(
+                fontWeight: FontWeight.bold, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917))),
         content: Text(message),
         actions: [
           TextButton(

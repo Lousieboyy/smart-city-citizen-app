@@ -13,11 +13,24 @@ MODEL_PATH = BASE_DIR / "keras_Model.h5"
 LABELS_PATH = BASE_DIR / "labels.txt"
 
 def train():
-    print("🚀 Loading images...")
+    print("Loading images...")
     
-    # 2. Load the image dataset
+    # 2. Load the image dataset with a validation split
     train_dataset = tf.keras.utils.image_dataset_from_directory(
         DATA_DIR,
+        validation_split=0.2,
+        subset="training",
+        seed=123,
+        image_size=(224, 224),
+        batch_size=32,
+        label_mode='categorical'
+    )
+
+    val_dataset = tf.keras.utils.image_dataset_from_directory(
+        DATA_DIR,
+        validation_split=0.2,
+        subset="validation",
+        seed=123,
         image_size=(224, 224),
         batch_size=32,
         label_mode='categorical'
@@ -26,54 +39,72 @@ def train():
     class_names = train_dataset.class_names
     num_classes = len(class_names)
 
-    # --- THE CLEAN FIX STARTS HERE ---
-    
-    # 3. Create the "Study Tools" (Augmentation)
+    # 3. Create the Augmentation layers for training only
     data_augmentation = Sequential([
         RandomFlip("horizontal"),
         RandomRotation(0.1),
         RandomZoom(0.1),
     ])
 
-    # 4. Apply Augmentation and Math to the DATA, not the Brain
-    # We do (img / 127.5) - 1 to make the numbers small (-1 to 1)
-    # This stops the TrueDivide error in FastAPI!
-    def prepare(img, label):
-        img = data_augmentation(img, training=True) # Flip/Rotate the data
-        img = (img / 127.5) - 1 # Dim the lights so the AI can see textures
+    # 4. Prepare datasets (scale image values to range [-1, 1])
+    def prepare_train(img, label):
+        img = data_augmentation(img, training=True)
+        img = (img / 127.5) - 1
         return img, label
 
-    train_dataset = train_dataset.map(prepare)
-    # --- THE CLEAN FIX ENDS HERE ---
+    def prepare_val(img, label):
+        img = (img / 127.5) - 1
+        return img, label
 
-    # 5. Build the "Clean" AI Model
-    print("🧠 Building the Clean AI Model...")
+    train_dataset = train_dataset.map(prepare_train)
+    val_dataset = val_dataset.map(prepare_val)
+
+    # 5. Build the AI Model with Sigmoid output for multi-label classification
+    print("Building the upgraded AI Model...")
     base_model = MobileNetV2(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
     base_model.trainable = False
 
     inputs = tf.keras.Input(shape=(224, 224, 3))
-    # Notice: No 'data_augmentation' inside the layers now!
     x = base_model(inputs, training=False) 
     x = GlobalAveragePooling2D()(x)
     x = Dense(128, activation='relu')(x)
     x = Dropout(0.2)(x) 
-    predictions = Dense(num_classes, activation='softmax')(x)
+    predictions = Dense(num_classes, activation='sigmoid')(x)
 
     model = Model(inputs=inputs, outputs=predictions)
 
     # 6. Train
-    print("Starting Training (20 Epochs)...")
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-    model.fit(train_dataset, epochs=20) 
+    # Phase 1: Warm-up classifier head
+    print("Starting Phase 1: Warm-up Classifier Head (10 Epochs)...")
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    model.fit(train_dataset, validation_data=val_dataset, epochs=10) 
+
+    # Phase 2: Fine-tune top layers of the backbone
+    print("Starting Phase 2: Fine-tuning top layers (15 Epochs)...")
+    base_model.trainable = True
+    # Freeze lower layers, unfreeze only top 30 layers
+    for layer in base_model.layers[:-30]:
+        layer.trainable = False
+
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    model.fit(train_dataset, validation_data=val_dataset, epochs=15)
 
     # 7. Save
-    print("Saving Clean Model...")
+    print("Saving Upgraded Model...")
     model.save(MODEL_PATH)
 
     with open(LABELS_PATH, "w") as f:
         for i, name in enumerate(class_names):
             f.write(f"{i} {name}\n")
-    print("✨ Done! Restart your Uvicorn server now.")
+    print("Done! Restart your Uvicorn server now.")
 
 if __name__ == "__main__":
     train()

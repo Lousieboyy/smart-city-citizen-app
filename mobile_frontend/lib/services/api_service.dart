@@ -1,7 +1,6 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import '../app_config.dart';
 import '../user_session.dart';
 
@@ -35,20 +34,33 @@ class ApiService {
     ).timeout(const Duration(seconds: 10));
   }
 
-  static Future<http.Response> signup(String username, String password) {
+  static Future<http.Response> signup({
+    required String username,
+    required String password,
+    required String fullName,
+    required String icNumber,
+    required String phoneNumber,
+  }) {
     return http.post(
       Uri.parse('$baseUrl/signup'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'username': username, 'password': password}),
+      body: jsonEncode({
+        'username': username,
+        'password': password,
+        'fullName': fullName,
+        'icNumber': icNumber,
+        'phoneNumber': phoneNumber,
+      }),
     ).timeout(const Duration(seconds: 10));
   }
 
   // ── Reports ─────────────────────────────────────────────────────────────
 
-  static Future<http.Response> getStats(int userId) {
+  static Future<http.Response> getStats([int? userId]) {
+    final queryParam = userId != null ? '?user_id=$userId' : '';
     return http
         .get(
-          Uri.parse('$baseUrl/reports/stats?user_id=$userId'),
+          Uri.parse('$baseUrl/reports/stats$queryParam'),
           headers: _authHeaders,
         )
         .timeout(const Duration(seconds: 10));
@@ -165,6 +177,19 @@ class ApiService {
     if (imagePath != null && imagePath.isNotEmpty) {
       final f = await http.MultipartFile.fromPath('file', imagePath);
       req.files.add(f);
+    }
+    return req.send().timeout(const Duration(seconds: 15));
+  }
+
+  /// Complete task and submit proof using raw bytes (works on both web and mobile).
+  static Future<http.StreamedResponse> completeTaskBytes(
+      int reportId, String notes, Uint8List? bytes, String? filename) async {
+    final req = http.MultipartRequest(
+        'POST', Uri.parse('$baseUrl/reports/$reportId/complete-task'));
+    req.headers.addAll(_authHeaders);
+    req.fields['notes'] = notes;
+    if (bytes != null && filename != null) {
+      req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
     }
     return req.send().timeout(const Duration(seconds: 15));
   }
