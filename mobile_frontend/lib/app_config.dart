@@ -14,7 +14,7 @@ class AppConfig {
   // Base URL of the FastAPI backend.
   static String get baseUrl {
     if (_envUrl.isNotEmpty) return _envUrl;
-    return 'https://smart-city-citizen-4v6h5uh64-lousieboyys-projects.vercel.app';
+    return 'https://smart-city-citizen-app-git-main-lousieboyys-projects.vercel.app';
   }
 }
 
