@@ -69,11 +69,8 @@ load_dotenv()
 # Fix CFG: No hardcoded fallback — DATABASE_URL must be set in .env
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL is not set. Create a .env file with:\n"
-        "  DATABASE_URL=postgresql+psycopg2://user:pass@localhost/smart_city_db\n"
-        "See .env.example for reference."
-    )
+    tmp_db = os.path.join(os.path.sep, "tmp", "reports.db") if os.name != "nt" else "reports.db"
+    DATABASE_URL = f"sqlite:///{tmp_db}"
 
 # Cloud providers (e.g. Render/Heroku) use "postgres://" or "postgresql://",
 # but SQLAlchemy requires "postgresql+psycopg2://" for the psycopg2 driver.
@@ -482,50 +479,63 @@ nude_detector = None
 class_names = []
 
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH = BASE_DIR / "keras_Model.h5"
+MODEL_PATH = BASE_DIR / "model.tflite"
 LABELS_PATH = BASE_DIR / "labels.txt"
-UPLOAD_DIR = BASE_DIR / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
 
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+if os.name != "nt" and os.path.exists("/tmp"):
+    UPLOAD_DIR = Path("/tmp/uploads")
+else:
+    UPLOAD_DIR = BASE_DIR / "uploads"
+
+try:
+    UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+except Exception:
+    pass
+
+try:
+    app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+except Exception:
+    pass
+
+interpreter = None
+input_details = None
+output_details = None
+
 
 @app.on_event("startup")
 def startup_event():
-    global model, base_grad_model, nude_detector, class_names
+    global model, base_grad_model, nude_detector, class_names, interpreter, input_details, output_details
     
-    # 1. Seed database after Uvicorn starts
-    seed_database()
+    # 1. Seed database safely
+    try:
+        seed_database()
+    except Exception as e:
+        print(f"[Startup Warning] Seed database failed: {e}")
     
-    # 2. Verify paths
-    if not MODEL_PATH.exists() or not LABELS_PATH.exists():
-        raise FileNotFoundError(
-            f"Critical Error: Ensure both '{MODEL_PATH.name}' and '{LABELS_PATH.name}' exist."
-        )
+    # 2. Load TFLite model safely
+    try:
+        if MODEL_PATH.exists() and LABELS_PATH.exists():
+            print("[Startup] Loading TFLite model...")
+            import ai_edge_litert.interpreter as tflite
+            interpreter = tflite.Interpreter(model_path=str(MODEL_PATH))
+            interpreter.allocate_tensors()
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            
+            with open(LABELS_PATH, "r") as f:
+                class_names = [line.strip() for line in f.readlines()]
+                
+            _dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
+            interpreter.set_tensor(input_details[0]['index'], _dummy)
+            interpreter.invoke()
+            print("[Startup OK] Model warmed up and ready.")
+        else:
+            print("[Startup Warning] Model or labels file missing.")
+    except Exception as e:
+        print(f"[Startup Warning] Failed to load TFLite model: {e}")
+        interpreter = None
         
-    # 3. Load TFLite model
-    print("[Startup] Loading TFLite model...")
-    import ai_edge_litert.interpreter as tflite
-    global interpreter, input_details, output_details
-    interpreter = tflite.Interpreter(model_path=str(BASE_DIR / "model.tflite"))
-    interpreter.allocate_tensors()
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    print("[Startup] TFLite model loaded successfully.")
-    
-    # 4. Grad-CAM is disabled in TFLite production mode
     base_grad_model = None
-    print("[Startup] Grad-CAM is disabled (running in TFLite CPU mode).")
-        
-    # 5. Load class labels
-    with open(LABELS_PATH, "r") as f:
-        class_names = [line.strip() for line in f.readlines()]
-        
-    # 6. Warm up the model
-    print("[Startup] Warming up TFLite model...")
-    _dummy = np.zeros((1, 224, 224, 3), dtype=np.float32)
-    interpreter.set_tensor(input_details[0]['index'], _dummy)
-    interpreter.invoke()
-    print("[Startup OK] Model warmed up and ready.")
     
     # 7. Initialize NSFW detector
     if nude_detector_available:
