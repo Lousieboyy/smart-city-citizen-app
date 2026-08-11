@@ -17,6 +17,5 @@ mobile_frontend/.flutter-plugins-dependencies
 .DS_Store
 Thumbs.db
 
-# Project Uploads & Temp Scripts
-ai_backend/uploads/
+# Project Temp Scripts
 mobile_frontend/*.py

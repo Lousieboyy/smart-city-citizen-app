@@ -2,7 +2,6 @@
 ai_data/
 ai_data_normal_backup/
 keras_Model.h5
-uploads/
 *.db
 *.db.bak
 .venv/
