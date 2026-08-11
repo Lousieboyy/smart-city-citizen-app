@@ -376,7 +376,7 @@ def seed_database():
             ("mbmb", "authority@mbmb.gov.my", hash_password("password"), "011-4445556", "authority", mbmb.agencyID),
             ("jkr", "authority@jkr.gov.my", hash_password("password"), "011-5556667", "authority", jkr.agencyID),
             ("swcorp", "authority@swcorp.gov.my", hash_password("password"), "011-6667778", "authority", swcorp.agencyID),
-            ("admin", "admin@melaka.gov.my", hash_password("admin1234"), "011-7778889", "admin", mbmb.agencyID),
+            ("admin", "admin@melaka.gov.my", hash_password("password"), "011-7778889", "admin", mbmb.agencyID),
         ]
         for name, email, passwd, phone, role, agency_id in staff_to_seed:
             if not db.query(DBStaff).filter(DBStaff.username == name).first():
