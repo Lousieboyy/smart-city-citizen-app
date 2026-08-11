@@ -482,20 +482,35 @@ BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "model.tflite"
 LABELS_PATH = BASE_DIR / "labels.txt"
 
-if os.name != "nt" and os.path.exists("/tmp"):
-    UPLOAD_DIR = Path("/tmp/uploads")
-else:
-    UPLOAD_DIR = BASE_DIR / "uploads"
+LOCAL_UPLOAD_DIR = BASE_DIR / "uploads"
+TMP_UPLOAD_DIR = Path("/tmp/uploads") if (os.name != "nt" and os.path.exists("/tmp")) else LOCAL_UPLOAD_DIR
 
 try:
-    UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+    LOCAL_UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+    if TMP_UPLOAD_DIR != LOCAL_UPLOAD_DIR:
+        TMP_UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
 except Exception:
     pass
 
-try:
-    app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
-except Exception:
-    pass
+@app.get("/uploads/{file_name:path}")
+def serve_upload_file(file_name: str):
+    # 1. Check runtime /tmp/uploads
+    if os.name != "nt" and os.path.exists("/tmp"):
+        tmp_file = Path("/tmp/uploads") / file_name
+        if tmp_file.exists() and tmp_file.is_file():
+            return FileResponse(str(tmp_file))
+
+    # 2. Check git-committed BASE_DIR / uploads
+    local_file = LOCAL_UPLOAD_DIR / file_name
+    if local_file.exists() and local_file.is_file():
+        return FileResponse(str(local_file))
+
+    # 3. Fallback sample image
+    sample_file = LOCAL_UPLOAD_DIR / "5362d52e-27fc-424d-96d1-85b73f489715.jpg"
+    if sample_file.exists() and sample_file.is_file():
+        return FileResponse(str(sample_file))
+
+    raise HTTPException(status_code=404, detail="Image file not found")
 
 interpreter = None
 input_details = None
