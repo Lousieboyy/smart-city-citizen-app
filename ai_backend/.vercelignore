@@ -1,0 +1,13 @@
+# Ignore heavy datasets and development artifacts for lightweight Vercel bundle
+ai_data/
+ai_data_normal_backup/
+keras_Model.h5
+uploads/
+*.db
+*.db.bak
+.venv/
+dataset_feedback/
+dataset_feedback_index.json
+reduce_normal_dataset.py
+train_model.py
+download_data.py
