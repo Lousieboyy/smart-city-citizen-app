@@ -100,11 +100,42 @@ app = FastAPI(title="Smart City AI Engine", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    # FIX: In production replace "*" with your actual frontend origin.
-    allow_origins=["*"],
+    allow_origins=[
+        "https://decision-support-system-web.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:8080",
+        "http://localhost:3000",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def custom_cors_middleware(request, call_next):
+    origin = request.headers.get("origin") or "*"
+    if request.method == "OPTIONS":
+        from fastapi.responses import Response
+        res = Response(status_code=200)
+        res.headers["Access-Control-Allow-Origin"] = origin
+        res.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        res.headers["Access-Control-Allow-Headers"] = "*"
+        res.headers["Access-Control-Allow-Credentials"] = "true"
+        return res
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        from fastapi.responses import JSONResponse
+        response = JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 # ─────────────────────────────────────────────────────────────
 #  DATABASE
