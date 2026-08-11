@@ -14,10 +14,7 @@ class AppConfig {
   // Base URL of the FastAPI backend.
   static String get baseUrl {
     if (_envUrl.isNotEmpty) return _envUrl;
-
-    // Default to the Localtunnel URL for development across all platforms.
-    // This allows physical devices and emulators to connect from any Wi-Fi network.
-    return 'https://dss-infra-reports.loca.lt';
+    return 'https://smart-city-citizen-4v6h5uh64-lousieboyys-projects.vercel.app';
   }
 }
 
