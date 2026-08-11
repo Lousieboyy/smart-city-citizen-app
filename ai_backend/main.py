@@ -996,6 +996,7 @@ def login(req: AuthRequest, db: Session = Depends(get_db)):
 #  ROUTES — REPORTS
 # ─────────────────────────────────────────────────────────────
 @app.get("/reports/")
+@app.get("/reports")
 def get_reports(
     user_id: Optional[int] = None,
     role: Optional[str] = None,
