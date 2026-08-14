@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import '../pixel_theme.dart';
 
-/// A reusable backdrop decorator that wraps our screens.
-/// Automatically resolves background color based on current theme brightness.
+/// A reusable backdrop decorator that wraps our screens with the flat cream
+/// canvas of the wellness theme. Kept as a wrapper (rather than inlined into
+/// every screen's Scaffold) so the canvas color stays a single source of
+/// truth, matching how it was used under the previous pixel starfield theme.
 class BackgroundDecorator extends StatelessWidget {
   final Widget child;
 
@@ -9,13 +12,11 @@ class BackgroundDecorator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: double.infinity,
       height: double.infinity,
-      color: isDark ? const Color(0xFF000000) : const Color(0xFFFAFAF9),
+      color: PixelTheme.bgPrimary,
       child: child,
     );
   }
 }
-

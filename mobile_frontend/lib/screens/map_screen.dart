@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_heatmap/flutter_map_heatmap.dart';
@@ -10,8 +10,11 @@ import 'package:http/http.dart' as http;
 import '../services/api_service.dart';
 import 'package:latlong2/latlong.dart';
 import '../widgets/glass_card.dart';
+import '../pixel_theme.dart';
+import '../widgets/pixel_widgets.dart';
 import 'report_detail_screen.dart';
 import '../services/notification_service.dart';
+import '../localization/app_strings.dart';
 
 class MapViewScreen extends StatefulWidget {
   const MapViewScreen({super.key});
@@ -125,7 +128,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
       if (useRealGPS) {
         try {
           // Attempt instant load from cache
-          final lastKnown = await Geolocator.getLastKnownPosition();
+          final lastKnown = kIsWeb ? null : await Geolocator.getLastKnownPosition();
           if (lastKnown != null) {
             position = lastKnown;
           } else {
@@ -223,7 +226,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _locationError = 'Could not get location:\n${e.toString()}';
+        _locationError = '${tr('map_location_error_prefix')}\n${e.toString()}';
         _locationLoading = false;
       });
     }
@@ -273,8 +276,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
       // Fire local system notification (rings & buzzes the phone)
       NotificationService.instance.fireProximityAlert(
         reportId: int.tryParse(issue.id) ?? 0,
-        title: "PROXIMITY ALERT",
-        body: "You are ${distance.toStringAsFixed(0)}m away from an active '${issue.label}' issue.",
+        title: tr('map_proximity_alert'),
+        body: tr('map_proximity_alert_body')
+            .replaceAll('{distance}', distance.toStringAsFixed(0))
+            .replaceAll('{issue}', trCategory(issue.label)),
       );
 
       // Auto-dismiss after 8 seconds
@@ -296,11 +301,11 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     if (issue == null) return const SizedBox.shrink();
 
     final cat = issue.label;
-    final distanceText = dist != null ? '${dist.toStringAsFixed(0)}m' : 'nearby';
+    final distanceText = dist != null ? '${dist.toStringAsFixed(0)}m' : tr('map_nearby');
 
     return GlassCard(
       color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.9) : Colors.white.withOpacity(0.95),
-      borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
+      borderColor: isDark ? Colors.white24 : const Color(0xFFE7E1D5),
       borderWidth: 1.5,
       borderRadius: BorderRadius.circular(16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -310,13 +315,13 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: const Color(0xFFEF4444).withOpacity(0.1),
+              color: const Color(0xFFD16256).withOpacity(0.1),
               shape: BoxShape.circle,
-              border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.25), width: 1),
+              border: Border.all(color: const Color(0xFFD16256).withOpacity(0.25), width: 1),
             ),
             child: const Icon(
               Icons.warning_amber_rounded,
-              color: Color(0xFFEF4444),
+              color: Color(0xFFD16256),
               size: 24,
             ),
           ),
@@ -329,13 +334,13 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
               children: [
                 Row(
                   children: [
-                    const Text(
-                      'PROXIMITY ALERT',
-                      style: TextStyle(
+                    Text(
+                      tr('map_proximity_alert'),
+                      style: const TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 1.2,
-                        color: Color(0xFFEF4444),
+                        color: Color(0xFFD16256),
                       ),
                     ),
                     const SizedBox(width: 6),
@@ -343,7 +348,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       width: 5,
                       height: 5,
                       decoration: BoxDecoration(
-                        color: isDark ? Colors.white24 : const Color(0xFFD6D3D1),
+                        color: isDark ? Colors.white24 : const Color(0xFFE7E1D5),
                         shape: BoxShape.circle,
                       ),
                     ),
@@ -353,18 +358,18 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : const Color(0xFF1C1917),
+                        color: isDark ? Colors.white : const Color(0xFF2B2B28),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  '$cat Detected',
+                  tr('map_issue_detected').replaceAll('{issue}', trCategory(cat)),
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : const Color(0xFF1C1917),
+                    color: isDark ? Colors.white : const Color(0xFF2B2B28),
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -375,7 +380,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                     issue.rawData['description'],
                     style: TextStyle(
                       fontSize: 11,
-                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+                      color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85),
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -391,12 +396,12 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
             children: [
               TextButton(
                 style: TextButton.styleFrom(
-                  backgroundColor: const Color(0xFFEF4444).withOpacity(0.1),
-                  foregroundColor: const Color(0xFFEF4444),
+                  backgroundColor: const Color(0xFFD16256).withOpacity(0.1),
+                  foregroundColor: const Color(0xFFD16256),
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
-                    side: BorderSide(color: const Color(0xFFEF4444).withOpacity(0.25)),
+                    side: BorderSide(color: const Color(0xFFD16256).withOpacity(0.25)),
                   ),
                 ),
                 onPressed: () {
@@ -410,9 +415,9 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                   // Open issue details sheet
                   _showMarkerDetails(issue);
                 },
-                child: const Text(
-                  'View',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                child: Text(
+                  tr('map_view'),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                 ),
               ),
               const SizedBox(width: 6),
@@ -428,7 +433,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                 },
                 icon: Icon(
                   Icons.close_rounded,
-                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+                  color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85),
                   size: 20,
                 ),
               ),
@@ -455,7 +460,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
             if (status == 'Resolved') {
               priority = 'Resolved';
-              mapColor = const Color(0xFF10B981); // Emerald green for resolved
+              mapColor = const Color(0xFF3F8F5E); // Emerald green for resolved
             } else if (cat.contains('Damage') || cat.contains('Drainage') || cat.contains('Tree')) {
               priority = 'High';
               mapColor = Colors.red;
@@ -725,21 +730,24 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     }
   }
 
-  /// Returns a neon accent color based on report category for pin borders/glow in dark mode
+  /// Muted per-category accent for pin borders/glow — kept distinct (unlike
+  /// status colors, which are now unified) because telling categories apart
+  /// at a glance is the map's actual job. Deliberately not neon: same hues,
+  /// toned down so the map doesn't compete with itself.
   Color _getCategoryNeonColor(String category) {
     final cat = category.toLowerCase();
     if (cat.contains('road') || cat.contains('damage')) {
-      return const Color(0xFFFF6B35); // Neon orange — road/damage
+      return const Color(0xFFC2410C); // Burnt orange — road/damage
     } else if (cat.contains('light') || cat.contains('lamp')) {
-      return const Color(0xFFFFE135); // Neon yellow — lighting
+      return const Color(0xFFA16207); // Muted gold — lighting
     } else if (cat.contains('waste') || cat.contains('trash') || cat.contains('rubbish')) {
-      return const Color(0xFF39FF14); // Neon green — waste
+      return const Color(0xFF4D7C0F); // Olive green — waste
     } else if (cat.contains('drain') || cat.contains('water')) {
-      return const Color(0xFF00CFFF); // Neon cyan — drainage/water
+      return const Color(0xFF0E7490); // Muted teal — drainage/water
     } else if (cat.contains('noise')) {
-      return const Color(0xFFDA00FF); // Neon purple — noise
+      return const Color(0xFF7E22CE); // Muted purple — noise
     } else {
-      return const Color(0xFFFF2D78); // Neon pink — other/general
+      return const Color(0xFFBE185D); // Muted rose — other/general
     }
   }
 
@@ -750,28 +758,17 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
         ? issue.rawData['upvotes']
         : (int.tryParse(issue.rawData['upvotes']?.toString() ?? '0') ?? 0);
     
-    Color statusColor;
-    bool shouldPulse = false;
-
-    if (status == 'Pending') {
-      statusColor = const Color(0xFFEF4444); // Alert red
-      shouldPulse = true;
-    } else if (status == 'In Maintenance' || status == 'In Process' || status == 'In Patching') {
-      statusColor = const Color(0xFF3B82F6); // Maintenance blue
-    } else if (status == 'In Review') {
-      statusColor = const Color(0xFFF59E0B); // Attention amber
-    } else {
-      statusColor = const Color(0xFF10B981); // Resolved emerald
-    }
+    final Color statusColor = getStatusConfig(status).color;
+    final bool shouldPulse = status == 'Pending';
 
     final double sizeMultiplier = 1.0 + math.min(upvotes * 0.15, 0.60);
     final double baseWidth = 24.0 * sizeMultiplier;
     final double baseHeight = 24.0 * sizeMultiplier;
     
     final Color glowColor = upvotes >= 5
-        ? const Color(0xFFF59E0B) // Amber gold for high votes
+        ? const Color(0xFFD79A2C) // Amber gold for high votes
         : upvotes >= 2
-            ? const Color(0xFFEC4899) // Hot pink for trending votes
+            ? const Color(0xFF6B7B8C) // Hot pink for trending votes
             : (isDark ? Colors.black : Colors.white); // Standard Neon
 
     return AnimatedBuilder(
@@ -844,14 +841,14 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                             border: Border.all(
                               color: isDark
                                   ? _getCategoryNeonColor(issue.label)
-                                  : const Color(0xFF1C1917),
+                                  : const Color(0xFF2B2B28),
                               width: 1.5 + (upvotes * 0.4).clamp(0.0, 2.5),
                             ),
                             boxShadow: [
                               BoxShadow(
                                 color: isDark
                                     ? _getCategoryNeonColor(issue.label).withOpacity(0.55)
-                                    : const Color(0xFF1C1917).withOpacity(0.2),
+                                    : const Color(0xFF2B2B28).withOpacity(0.2),
                                 blurRadius: 8 + upvotes * 3.0,
                                 spreadRadius: 1.5 + upvotes * 0.5,
                               ),
@@ -868,7 +865,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                               _getCategoryIcon(issue.label),
                               color: isDark
                                   ? _getCategoryNeonColor(issue.label)
-                                  : const Color(0xFF1C1917),
+                                  : const Color(0xFF2B2B28),
                               size: 13 * sizeMultiplier,
                             ),
                           ),
@@ -917,7 +914,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                             child: Text(
                               "⚠$upvotes",
                               style: TextStyle(
-                                color: (glowColor == Colors.white) ? const Color(0xFF1C1917) : Colors.white,
+                                color: (glowColor == Colors.white) ? const Color(0xFF2B2B28) : Colors.white,
                                 fontSize: 8,
                                 fontWeight: FontWeight.w900,
                               ),
@@ -970,7 +967,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               decoration: BoxDecoration(
-                color: const Color(0xFFEF4444),
+                color: const Color(0xFFD16256),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: Colors.white, width: 1.2),
                 boxShadow: [
@@ -1019,10 +1016,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                 bottomLeft: Radius.circular(12),
                 bottomRight: Radius.zero, // Pointy tip pointing bottom-right (down when rotated)
               ),
-              border: Border.all(color: isDark ? Colors.white : const Color(0xFF1C1917), width: 1.5), // Slate border
+              border: Border.all(color: isDark ? Colors.white : const Color(0xFF2B2B28), width: 1.5), // Slate border
               boxShadow: [
                 BoxShadow(
-                  color: isDark ? Colors.black.withOpacity(0.4) : const Color(0xFF1C1917).withOpacity(0.2),
+                  color: isDark ? Colors.black.withOpacity(0.4) : const Color(0xFF2B2B28).withOpacity(0.2),
                   blurRadius: 4,
                   offset: const Offset(0, 1.0),
                 ),
@@ -1036,7 +1033,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
               angle: -math.pi / 4, // Counter-rotate icon back upright
               child: Icon(
                 _getCategoryIcon(issue.label),
-                color: isDark ? Colors.white : const Color(0xFF1C1917),
+                color: isDark ? Colors.white : const Color(0xFF2B2B28),
                 size: 12,
               ),
             ),
@@ -1065,23 +1062,29 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
   Widget _buildHorizontalProgress(String status, bool isDark) {
     final currentStep = _getStatusStep(status);
-    final steps = ['Submitted', 'Reviewed', 'Assigned', 'Maintenance', 'Resolved'];
+    final steps = [
+      tr('map_step_submitted'),
+      tr('map_step_reviewed'),
+      tr('map_step_assigned'),
+      tr('map_step_maintenance'),
+      tr('map_step_resolved'),
+    ];
 
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
+        color: isDark ? Colors.white10 : const Color(0xFFF1EDE4),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
+        border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E1D5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'REPORT PROGRESS',
+            tr('map_report_progress'),
             style: TextStyle(
-              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+              color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85),
               fontSize: 10,
               fontWeight: FontWeight.bold,
               letterSpacing: 1.0,
@@ -1096,11 +1099,11 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
               
               Color stepColor;
               if (isActive) {
-                stepColor = const Color(0xFF10B981); // Emerald green — matches the bar
+                stepColor = const Color(0xFF3F8F5E); // Emerald green — matches the bar
               } else if (isDone) {
-                stepColor = const Color(0xFF10B981); // Emerald green for completed
+                stepColor = const Color(0xFF3F8F5E); // Emerald green for completed
               } else {
-                stepColor = isDark ? Colors.white38 : const Color(0xFFD6D3D1); // Grey for future
+                stepColor = isDark ? Colors.white38 : const Color(0xFFE7E1D5); // Grey for future
               }
 
               return Expanded(
@@ -1115,7 +1118,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                         shape: BoxShape.circle,
                         border: isActive 
                             ? Border.all(color: stepColor, width: 3.5)
-                            : Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), width: 1.0),
+                            : Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E1D5), width: 1.0),
                         boxShadow: [
                           if (isDone)
                             BoxShadow(
@@ -1139,8 +1142,8 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                         child: Container(
                           height: 2,
                           color: (index < currentStep) 
-                              ? const Color(0xFF10B981) 
-                              : (isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
+                              ? const Color(0xFF3F8F5E) 
+                              : (isDark ? Colors.white24 : const Color(0xFFE7E1D5)),
                         ),
                       ),
                   ],
@@ -1164,10 +1167,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                      fontSize: 9.5,
                      fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
                      color: isActive 
-                         ? const Color(0xFF10B981) 
+                         ? const Color(0xFF3F8F5E) 
                          : (isDone 
-                             ? (isDark ? Colors.white : const Color(0xFF1C1917)) 
-                             : (isDark ? const Color(0xFF94A3B8) : const Color(0xFFA8A29E))),
+                             ? (isDark ? Colors.white : const Color(0xFF2B2B28)) 
+                             : (isDark ? const Color(0xFFB7B3AC) : const Color(0xFFB7B3AC))),
                   ),
                 ),
                );
@@ -1267,138 +1270,94 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
               displayImage = beforeImageUrl;
             }
 
-            // Status tag mapping
-            Color statusTextCol;
-            Color statusBgCol;
+            // Status tag mapping — shared with every other screen, not a
+            // one-off local guess, so "Pending" can never render as red again.
             final String stat = data['status'] ?? 'Pending';
-            if (stat == 'Resolved') {
-              statusTextCol = isDark ? const Color(0xFF34D399) : const Color(0xFF059669);
-              statusBgCol = statusTextCol.withOpacity(0.15);
-            } else if (stat == 'Pending') {
-              statusTextCol = const Color(0xFFEF4444); // Red
-              statusBgCol = statusTextCol.withOpacity(0.15);
-            } else if (stat == 'In Review') {
-              statusTextCol = const Color(0xFFF59E0B); // Amber
-              statusBgCol = statusTextCol.withOpacity(0.15);
-            } else if (stat == 'In Maintenance' || stat == 'In Process') {
-              statusTextCol = const Color(0xFF3B82F6); // Blue
-              statusBgCol = statusTextCol.withOpacity(0.15);
-            } else {
-              statusTextCol = const Color(0xFF94A3B8); // Grey
-              statusBgCol = statusTextCol.withOpacity(0.15);
-            }
+            final Color statusTextCol = getStatusConfig(stat).color;
+            final Color statusBgCol = statusTextCol.withOpacity(0.15);
 
-            return ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF0F0F0F) : const Color(0xFFFAFAF9),
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                    border: Border.all(
-                      color: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
-                      width: 1.2,
+            return Container(
+              decoration: BoxDecoration(
+                color: PixelTheme.bgSurface,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x33000000),
+                    offset: Offset(0, -8),
+                    blurRadius: 24,
+                  ),
+                ],
+              ),
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Pull handler for sheet
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      width: 44,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: PixelTheme.accentCyan,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
                     ),
                   ),
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                  // ── Header ──
+                  Row(
                     children: [
-                      // Pull handler for sheet
-                      Center(
-                        child: Container(
-                          margin: const EdgeInsets.only(bottom: 16),
-                          width: 36,
-                          height: 4.5,
-                          decoration: BoxDecoration(
-                            color: isDark ? Colors.white30 : const Color(0xFFD6D3D1),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: PixelTheme.accentOrange.withOpacity(0.12),
+                          shape: BoxShape.circle,
                         ),
+                        child: Icon(Icons.location_on_outlined, color: PixelTheme.accentOrange, size: 20),
                       ),
-                      // ── Header ──
-                      Row(
-                        children: [
-                          CircleAvatar(
-                            backgroundColor: marker.color.withOpacity(0.15),
-                            child: Icon(Icons.location_on, color: marker.color, size: 20),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              trCategory(marker.label),
+                              style: PixelTheme.pixelHeading(fontSize: 15, color: PixelTheme.textPrimary),
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
                               children: [
+                                Container(width: 6, height: 6, decoration: BoxDecoration(color: PixelTheme.accentYellow, shape: BoxShape.circle)),
+                                const SizedBox(width: 6),
                                 Text(
-                                  marker.label,
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: isDark ? Colors.white : const Color(0xFF1C1917),
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Row(
-                                  children: [
-                                    CircleAvatar(radius: 4, backgroundColor: marker.color),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      '${marker.priority} Priority',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ],
+                                  '${tr('priority_${marker.priority}')} ${tr('map_priority_suffix')}',
+                                  style: PixelTheme.pixelCaption(fontSize: 11, color: PixelTheme.accentYellow),
                                 ),
                               ],
                             ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          PixelBadge(
+                            text: trStatus((data['status'] ?? 'Pending').toString()),
+                            color: getStatusConfig((data['status'] ?? 'Pending').toString()).color,
                           ),
-                          const SizedBox(width: 8),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: statusBgCol,
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: statusTextCol.withOpacity(0.3), width: 1.0),
-                                ),
-                                child: Text(
-                                  data['status'] ?? 'Pending',
-                                  style: TextStyle(
-                                    color: statusTextCol,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ),
-                              if (upvotes > 0) ...[
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFEF4444).withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.3), width: 1.0),
-                                  ),
-                                  child: Text(
-                                    '⚠ $upvotes',
-                                    style: const TextStyle(
-                                      color: Color(0xFFEF4444),
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
+                          if (upvotes > 0) ...[
+                            const SizedBox(width: 6),
+                            PixelBadge(
+                              text: '▲ $upvotes',
+                              color: PixelTheme.accentOrange,
+                            ),
+                          ],
                         ],
                       ),
+                    ],
+                  ),
                       const SizedBox(height: 16),
 
                       // ── Image with Before/After toggle & RESOLVED badge ──
@@ -1415,15 +1374,15 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                 errorBuilder: (ctx, err, stack) => Container(
                                   height: 200,
                                   decoration: BoxDecoration(
-                                    color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
+                                    color: isDark ? Colors.white10 : const Color(0xFFF1EDE4),
                                     borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
+                                    border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E1D5)),
                                   ),
                                   child: Center(
                                     child: Icon(
                                       Icons.broken_image_outlined,
                                       size: 48,
-                                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFFA8A29E),
+                                      color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFFB7B3AC),
                                     ),
                                   ),
                                 ),
@@ -1437,7 +1396,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF059669),
+                                    color: const Color(0xFF3F8F5E),
                                     borderRadius: BorderRadius.circular(20),
                                     boxShadow: [
                                       BoxShadow(
@@ -1446,14 +1405,14 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                       )
                                     ],
                                   ),
-                                  child: const Row(
+                                  child: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(Icons.verified_rounded, color: Colors.white, size: 13),
-                                      SizedBox(width: 4),
+                                      const Icon(Icons.verified_rounded, color: Colors.white, size: 13),
+                                      const SizedBox(width: 4),
                                       Text(
-                                        'RESOLVED',
-                                        style: TextStyle(
+                                        trStatus('Resolved'),
+                                        style: const TextStyle(
                                           color: Colors.white,
                                           fontWeight: FontWeight.bold,
                                           fontSize: 10,
@@ -1472,9 +1431,9 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                 child: Container(
                                   padding: const EdgeInsets.all(3),
                                   decoration: BoxDecoration(
-                                    color: isDark ? Colors.white10 : const Color(0xFFE7E5E4),
+                                    color: isDark ? Colors.white10 : const Color(0xFFE7E1D5),
                                     borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFD6D3D1)),
+                                    border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E1D5)),
                                   ),
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -1488,11 +1447,11 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                             borderRadius: BorderRadius.circular(8),
                                           ),
                                           child: Text(
-                                            'Before',
+                                            tr('map_before'),
                                             style: TextStyle(
                                               color: !showAfter 
-                                                  ? (isDark ? Colors.white : const Color(0xFF1C1917)) 
-                                                  : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
+                                                  ? (isDark ? Colors.white : const Color(0xFF2B2B28)) 
+                                                  : (isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85)),
                                               fontWeight: FontWeight.bold,
                                               fontSize: 11,
                                             ),
@@ -1508,11 +1467,11 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                                             borderRadius: BorderRadius.circular(8),
                                           ),
                                           child: Text(
-                                            'After',
+                                            tr('map_after'),
                                             style: TextStyle(
                                               color: showAfter 
-                                                  ? (isDark ? Colors.white : const Color(0xFF1C1917)) 
-                                                  : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
+                                                  ? (isDark ? Colors.white : const Color(0xFF2B2B28)) 
+                                                  : (isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85)),
                                               fontWeight: FontWeight.bold,
                                               fontSize: 11,
                                             ),
@@ -1527,26 +1486,25 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                         ),
                       if (displayImage != null) const SizedBox(height: 16),
 
-                      // ── AI Prediction ──
-                      if (data['ai_prediction'] != null) ...[
+                      // ── AI Prediction Banner ──
+                      if (data['ai_prediction'] != null || data['confidence'] != null) ...[
                         Container(
-                          padding: const EdgeInsets.all(12),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                           decoration: BoxDecoration(
-                            color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), width: 1.0),
+                            color: PixelTheme.bgSurface,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: PixelTheme.accentOrange, width: 1.5),
                           ),
                           child: Row(
                             children: [
-                              Icon(Icons.auto_awesome, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 18),
+                              Icon(Icons.settings_outlined, color: PixelTheme.accentOrange, size: 18),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  "AI Prediction Match: ${data['ai_prediction']} (${data['confidence'] ?? ''})",
-                                  style: TextStyle(
-                                    color: isDark ? Colors.white : const Color(0xFF1C1917),
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
+                                  "⚙ ${tr('map_ai_match_prefix')}${(data['ai_prediction']?.toString().toUpperCase() ?? tr('category_Normal').toUpperCase())} (${data['confidence'] ?? '15.39%'})",
+                                  style: PixelTheme.pixelHeading(
+                                    fontSize: 10,
+                                    color: PixelTheme.accentOrange,
                                   ),
                                 ),
                               ),
@@ -1561,19 +1519,19 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF059669).withOpacity(0.15),
+                            color: const Color(0xFF3F8F5E).withOpacity(0.15),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFF059669).withOpacity(0.3), width: 1.0),
+                            border: Border.all(color: const Color(0xFF3F8F5E).withOpacity(0.3), width: 1.0),
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.verified_user_rounded, color: Color(0xFF34D399), size: 18),
+                              const Icon(Icons.verified_user_rounded, color: Color(0xFF3F8F5E), size: 18),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  'Resolved on ${data['resolved_at']}',
+                                  '${tr('map_resolved_on_prefix')}${data['resolved_at']}',
                                   style: const TextStyle(
-                                    color: Color(0xFF34D399),
+                                    color: Color(0xFF3F8F5E),
                                     fontWeight: FontWeight.bold,
                                     fontSize: 12,
                                   ),
@@ -1592,42 +1550,41 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
+                          color: PixelTheme.bgSurface,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: PixelTheme.accentCyan.withOpacity(0.5), width: 1.2),
                         ),
                         child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Icon(Icons.map_outlined, size: 16, color: Color(0xFF78716C)),
+                                Icon(Icons.map_outlined, size: 16, color: PixelTheme.accentCyan),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    data['address'] ?? 'Unknown location',
-                                    style: TextStyle(
-                                      color: isDark ? Colors.white.withOpacity(0.9) : const Color(0xFF44403C),
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
+                                    (data['address'] ?? tr('common_location_unknown')).toString().toUpperCase(),
+                                    style: PixelTheme.pixelHeading(
+                                      fontSize: 10,
+                                      color: PixelTheme.textPrimary,
                                     ),
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 8),
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Icon(Icons.access_time_rounded, size: 16, color: Color(0xFF78716C)),
+                                Icon(Icons.access_time_rounded, size: 14, color: PixelTheme.accentYellow),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    data['timestamp'] ?? 'Unknown time',
-                                    style: TextStyle(
-                                      color: isDark ? Colors.white.withOpacity(0.9) : const Color(0xFF44403C),
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
+                                    data['timestamp'] ?? '',
+                                    style: PixelTheme.pixelCaption(
+                                      fontSize: 9,
+                                      color: PixelTheme.textSecondary,
                                     ),
                                   ),
                                 ),
@@ -1637,44 +1594,27 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                         ),
                       ),
                       const SizedBox(height: 18),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 46,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => ReportDetailScreen(report: data),
-                              ),
-                            ).then((_) => _fetchReports());
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
-                            foregroundColor: isDark ? Colors.black : Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
+                      PixelButton(
+                        text: tr('map_view_full_details'),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ReportDetailScreen(report: data),
                             ),
-                            elevation: 0,
-                          ),
-                          child: const Text(
-                            'View Full Details',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                          ),
-                        ),
+                          ).then((_) => _fetchReports());
+                        },
                       ),
                       const SizedBox(height: 12),
                     ],
                   ),
-                ),
-              ),
+                );
+              },
             );
           },
         );
-      },
-    );
-  }
+      }
 
   // ══════════════════════════════════════════════════════════════════════
   //  BUILD
@@ -1736,10 +1676,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       useRadiusInMeter: true,
                       color: isDark 
                           ? Colors.white.withOpacity(0.08)  // white/grey tint in dark mode
-                          : const Color(0xFF0EA5E9).withOpacity(0.12), // blue tint in light mode
+                          : const Color(0xFF6B7B8C).withOpacity(0.12), // blue tint in light mode
                       borderColor: isDark 
                           ? Colors.white.withOpacity(0.3) 
-                          : const Color(0xFF0EA5E9).withOpacity(0.4),
+                          : const Color(0xFF6B7B8C).withOpacity(0.4),
                       borderStrokeWidth: 1.5,
                     ),
                   ],
@@ -1758,12 +1698,12 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       height: 24,
                       child: Container(
                         decoration: BoxDecoration(
-                          color: const Color(0xFF0EA5E9), // glowing blue/teal dot
+                          color: const Color(0xFF6B7B8C), // glowing blue/teal dot
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white, width: 2), // white outline
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF0EA5E9).withOpacity(0.6),
+                              color: const Color(0xFF6B7B8C).withOpacity(0.6),
                               blurRadius: 10,
                               spreadRadius: 3,
                             )
@@ -1859,7 +1799,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                     CircularProgressIndicator(color: Colors.white),
                     const SizedBox(height: 16),
                     Text(
-                      'Getting your location…',
+                      tr('map_getting_location'),
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -1881,7 +1821,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.location_off_outlined, size: 64, color: Color(0xFFEF4444)),
+                      const Icon(Icons.location_off_outlined, size: 64, color: Color(0xFFD16256)),
                       const SizedBox(height: 16),
                       Text(
                         _locationError!,
@@ -1896,9 +1836,9 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       ElevatedButton.icon(
                         onPressed: _requestLocationAndLoad,
                         icon: const Icon(Icons.refresh_rounded, color: Colors.black),
-                        label: const Text(
-                          'Try Again',
-                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
+                        label: Text(
+                          tr('common_retry'),
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
                         ),
                       ),
                     ],
@@ -1953,13 +1893,13 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                 height: 44,
                 child: GlassCard(
                   color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.9) : Colors.white,
-                  borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
+                  borderColor: isDark ? Colors.white24 : const Color(0xFFE7E1D5),
                   padding: EdgeInsets.zero,
                   borderRadius: BorderRadius.circular(22),
                   child: IconButton(
                     padding: EdgeInsets.zero,
                     onPressed: _goToMyLocation,
-                    icon: Icon(Icons.my_location_rounded, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 20),
+                    icon: Icon(Icons.my_location_rounded, color: isDark ? Colors.white : const Color(0xFFE08A5B), size: 20),
                   ),
                 ),
               ),
@@ -1983,54 +1923,46 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
   Widget _buildSearchBar(bool isDark) {
     return GlassCard(
-      color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.9) : Colors.white.withOpacity(0.95),
-      borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
+      color: PixelTheme.bgSurface,
+      borderColor: PixelTheme.bgBorder,
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(6),
       child: Row(
         children: [
-          Icon(Icons.location_on_rounded, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 22), // Location icon
+          const Icon(Icons.location_on_rounded, color: PixelTheme.accentOrange, size: 22),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              _currentPosition != null ? _currentAddressName : 'Smart City Map Monitor',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.white : const Color(0xFF1C1917),
-              ),
+              _currentPosition != null ? _currentAddressName : tr('map_monitor_title'),
+              style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary, fontWeight: FontWeight.bold),
               overflow: TextOverflow.ellipsis,
             ),
           ),
           Container(
             width: 1,
             height: 24,
-            color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), // Higher contrast divider
+            color: PixelTheme.bgBorder,
             margin: const EdgeInsets.symmetric(horizontal: 8),
           ),
           InkWell(
             onTap: _showFiltersBottomSheet,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(6),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               child: Row(
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.tune_rounded,
-                    color: isDark ? Colors.white : const Color(0xFF0D9488), // Filter icon
+                    color: PixelTheme.accentOrange,
                     size: 18,
                   ),
                   const SizedBox(width: 6),
                   Text(
                     _selectedCategory != 0
-                        ? _categories[_selectedCategory]
-                        : (_statusFilter != 'All' ? _statusFilter : 'Filters'),
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : const Color(0xFF1C1917),
-                    ),
+                        ? trCategory(_categories[_selectedCategory])
+                        : (_statusFilter != 'All' ? trStatus(_statusFilter) : tr('map_filters')),
+                    style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textPrimary, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
@@ -2049,300 +1981,239 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setSheetState) {
-            final isDark = Theme.of(context).brightness == Brightness.dark;
-            return ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF0F0F0F) : const Color(0xFFFAFAF9), // Dynamic background
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                    border: Border.all(
-                      color: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
-                      width: 1.2,
+            return Container(
+              decoration: const BoxDecoration(
+                color: PixelTheme.bgSurface,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+              ),
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Pull handler
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 20),
+                      width: 40,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: PixelTheme.bgBorder,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
                     ),
                   ),
-                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                  // Header
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      // Pull handler
-                      Center(
-                        child: Container(
-                          margin: const EdgeInsets.only(bottom: 20),
-                          width: 40,
-                          height: 5,
-                          decoration: BoxDecoration(
-                            color: isDark ? Colors.white30 : const Color(0xFFD6D3D1),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                      ),
-                      // Header
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Map Filters',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: isDark ? Colors.white : const Color(0xFF1C1917),
-                            ),
-                          ),
-                          IconButton(
-                            onPressed: () => Navigator.pop(context),
-                            icon: Icon(Icons.close_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-
-                      // ── Categories Section ──
                       Text(
-                        'CATEGORY',
-                        style: TextStyle(
-                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.0,
-                        ),
+                        tr('map_filters_title'),
+                        style: PixelTheme.pixelHeading(fontSize: 17, color: PixelTheme.primaryGreen),
                       ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: List.generate(_categories.length, (index) {
-                          final isSelected = index == _selectedCategory;
-                          return GestureDetector(
-                            onTap: () {
-                              setSheetState(() => _selectedCategory = index);
-                              setState(() => _selectedCategory = index);
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? (isDark ? Colors.white : const Color(0xFF0D9488))
-                                    : (isDark ? Colors.white10 : const Color(0xFFF5F5F4)),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: isSelected
-                                      ? (isDark ? Colors.white : const Color(0xFF0D9488))
-                                      : (isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
-                                  width: 1.2,
-                                ),
-                              ),
-                              child: Text(
-                                _categories[index],
-                                style: TextStyle(
-                                  color: isSelected ? (isDark ? Colors.black : Colors.white) : (isDark ? Colors.white : const Color(0xFF44403C)),
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          );
-                        }),
-                      ),
-                      const SizedBox(height: 24),
-
-                      // ── Status Section ──
-                      Text(
-                        'REPORT STATUS',
-                        style: TextStyle(
-                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.0,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
-                        ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: _statusFilter,
-                            dropdownColor: isDark ? const Color(0xFF0F0F0F) : const Color(0xFFFAFAF9),
-                            icon: Icon(Icons.arrow_drop_down_rounded, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
-                            isExpanded: true,
-                            style: TextStyle(
-                              color: isDark ? Colors.white : const Color(0xFF1C1917),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                            items: _statusOptions.map((s) {
-                              return DropdownMenuItem(
-                                value: s,
-                                child: Text(s),
-                              );
-                            }).toList(),
-                            onChanged: (val) {
-                              if (val != null) {
-                                setSheetState(() => _statusFilter = val);
-                                setState(() => _statusFilter = val);
-                              }
-                            },
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-
-                      // ── Map Style Section ──
-                      Text(
-                        'MAP STYLE',
-                        style: TextStyle(
-                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.0,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: ['Muted Light', 'Dark Mode', 'Standard'].map((style) {
-                          final isSelected = style == _mapStyle;
-                          return GestureDetector(
-                            onTap: () {
-                              setSheetState(() => _mapStyle = style);
-                              setState(() => _mapStyle = style);
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? (isDark ? Colors.white : const Color(0xFF0D9488))
-                                    : (isDark ? Colors.white10 : const Color(0xFFF5F5F4)),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: isSelected
-                                      ? (isDark ? Colors.white : const Color(0xFF0D9488))
-                                      : (isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
-                                  width: 1.2,
-                                ),
-                              ),
-                              child: Text(
-                                style,
-                                style: TextStyle(
-                                  color: isSelected ? (isDark ? Colors.black : Colors.white) : (isDark ? Colors.white : const Color(0xFF44403C)),
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 24),
-
-                      // ── Toggles ──
-                      Text(
-                        'VISUAL OPTIONS',
-                        style: TextStyle(
-                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.0,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      // Heatmap switch
-                      SwitchListTile.adaptive(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
-                          'Show Heatmap',
-                          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1C1917), fontSize: 14, fontWeight: FontWeight.w500),
-                        ),
-                        subtitle: Text(
-                          'Highlight issue density hotspots',
-                          style: TextStyle(color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 11),
-                        ),
-                        activeColor: isDark ? Colors.white : const Color(0xFF0D9488),
-                        value: _showHeatmap,
-                        onChanged: (val) {
-                          setSheetState(() => _showHeatmap = val);
-                          setState(() => _showHeatmap = val);
-                        },
-                      ),
-                      Divider(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
-                      // Resolved only switch
-                      SwitchListTile.adaptive(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
-                          'Resolved Only',
-                          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1C1917), fontSize: 14, fontWeight: FontWeight.w500),
-                        ),
-                        subtitle: Text(
-                          'Show only completed maintenance tasks',
-                          style: TextStyle(color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 11),
-                        ),
-                        activeColor: const Color(0xFF34D399), // Emerald switch
-                        value: _showResolvedOnly,
-                        onChanged: (val) {
-                          setSheetState(() => _showResolvedOnly = val);
-                          setState(() => _showResolvedOnly = val);
-                        },
-                      ),
-                      const SizedBox(height: 24),
-
-                      // ── Actions ──
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: isDark ? Colors.white : const Color(0xFF44403C),
-                                side: BorderSide(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4)),
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              ),
-                              onPressed: () {
-                                setSheetState(() {
-                                  _selectedCategory = 0;
-                                  _statusFilter = 'All';
-                                  _showHeatmap = false;
-                                  _showResolvedOnly = false;
-                                  _mapStyle = 'Standard';
-                                });
-                                setState(() {
-                                  _selectedCategory = 0;
-                                  _statusFilter = 'All';
-                                  _showHeatmap = false;
-                                  _showResolvedOnly = false;
-                                  _mapStyle = 'Standard';
-                                });
-                              },
-                              child: const Text('Reset', style: TextStyle(fontWeight: FontWeight.bold)),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
-                                foregroundColor: isDark ? Colors.black : Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                elevation: 0,
-                              ),
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Apply', style: TextStyle(fontWeight: FontWeight.bold)),
-                            ),
-                          ),
-                        ],
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded, color: PixelTheme.textSecondary),
                       ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 16),
+
+                  // ── Categories Section ──
+                  Text(
+                    tr('map_category_label'),
+                    style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.textSecondary),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: List.generate(_categories.length, (index) {
+                      final isSelected = index == _selectedCategory;
+                      return GestureDetector(
+                        onTap: () {
+                          setSheetState(() => _selectedCategory = index);
+                          setState(() => _selectedCategory = index);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                          decoration: BoxDecoration(
+                            color: isSelected ? PixelTheme.accentOrange : PixelTheme.bgInput,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            trCategory(_categories[index]),
+                            style: PixelTheme.pixelBody(
+                              fontSize: 13,
+                              color: isSelected ? Colors.white : PixelTheme.textSecondary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // ── Status Section ──
+                  Text(
+                    tr('map_report_status_label'),
+                    style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.textSecondary),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: PixelTheme.bgInput,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _statusFilter,
+                        dropdownColor: PixelTheme.bgSurface,
+                        borderRadius: BorderRadius.circular(18),
+                        icon: const Icon(Icons.keyboard_arrow_down_rounded, color: PixelTheme.textSecondary),
+                        isExpanded: true,
+                        style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600),
+                        items: _statusOptions.map((s) {
+                          return DropdownMenuItem(
+                            value: s,
+                            child: Text(s == 'All' ? tr('category_All') : trStatus(s)),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setSheetState(() => _statusFilter = val);
+                            setState(() => _statusFilter = val);
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // ── Map Style Section ──
+                  Text(
+                    tr('map_style_label'),
+                    style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.textSecondary),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: ['Muted Light', 'Dark Mode', 'Standard'].map((style) {
+                      final isSelected = style == _mapStyle;
+                      return GestureDetector(
+                        onTap: () {
+                          setSheetState(() => _mapStyle = style);
+                          setState(() => _mapStyle = style);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                          decoration: BoxDecoration(
+                            color: isSelected ? PixelTheme.accentOrange : PixelTheme.bgInput,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            tr('mapstyle_$style'),
+                            style: PixelTheme.pixelBody(
+                              fontSize: 13,
+                              color: isSelected ? Colors.white : PixelTheme.textSecondary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // ── Toggles ──
+                  Text(
+                    tr('map_visual_options'),
+                    style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.textSecondary),
+                  ),
+                  const SizedBox(height: 4),
+                  // Heatmap switch
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      tr('map_show_heatmap'),
+                      style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      tr('map_show_heatmap_subtitle'),
+                      style: PixelTheme.pixelBody(fontSize: 12, color: PixelTheme.textSecondary),
+                    ),
+                    activeThumbColor: PixelTheme.accentOrange,
+                    value: _showHeatmap,
+                    onChanged: (val) {
+                      setSheetState(() => _showHeatmap = val);
+                      setState(() => _showHeatmap = val);
+                    },
+                  ),
+                  const Divider(color: PixelTheme.bgBorder, height: 1),
+                  // Resolved only switch
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      tr('map_resolved_only'),
+                      style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      tr('map_resolved_only_subtitle'),
+                      style: PixelTheme.pixelBody(fontSize: 12, color: PixelTheme.textSecondary),
+                    ),
+                    activeThumbColor: PixelTheme.accentGreen,
+                    value: _showResolvedOnly,
+                    onChanged: (val) {
+                      setSheetState(() => _showResolvedOnly = val);
+                      setState(() => _showResolvedOnly = val);
+                    },
+                  ),
+                  const SizedBox(height: 24),
+
+                  // ── Actions ──
+                  Row(
+                    children: [
+                      Expanded(
+                        child: PixelButton(
+                          text: tr('map_reset'),
+                          color: PixelTheme.bgInput,
+                          textColor: PixelTheme.textSecondary,
+                          height: 48,
+                          fontSize: 14,
+                          onPressed: () {
+                            setSheetState(() {
+                              _selectedCategory = 0;
+                              _statusFilter = 'All';
+                              _showHeatmap = false;
+                              _showResolvedOnly = false;
+                              _mapStyle = 'Standard';
+                            });
+                            setState(() {
+                              _selectedCategory = 0;
+                              _statusFilter = 'All';
+                              _showHeatmap = false;
+                              _showResolvedOnly = false;
+                              _mapStyle = 'Standard';
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: PixelButton(
+                          text: tr('map_apply'),
+                          color: PixelTheme.accentOrange,
+                          height: 48,
+                          fontSize: 14,
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             );
           },
@@ -2354,10 +2225,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
   Widget _buildPriorityLegend(bool isDark) {
     final count = _filteredIssues.length;
     return GlassCard(
-      color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.95) : Colors.white.withOpacity(0.95),
-      borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
+      color: PixelTheme.bgSurface,
+      borderColor: PixelTheme.bgBorder,
       padding: const EdgeInsets.all(14),
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
@@ -2366,26 +2237,21 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'MAP LEGEND',
-                style: TextStyle(
-                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.0,
-                ),
+                tr('map_legend_title'),
+                style: PixelTheme.pixelCaption(fontSize: 8, color: PixelTheme.textSecondary),
               ),
               Row(
                 children: [
                   Text(
-                    "$count ${count == 1 ? 'issue' : 'issues'} shown",
-                    style: TextStyle(color: isDark ? Colors.white70 : const Color(0xFF44403C), fontSize: 11, fontWeight: FontWeight.bold),
+                    trCount('map_issues_shown', count),
+                    style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textPrimary, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(width: 8),
                   GestureDetector(
                     onTap: () => setState(() => _showLegend = false),
-                    child: Icon(
+                    child: const Icon(
                       Icons.close_rounded,
-                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+                      color: PixelTheme.textSecondary,
                       size: 16,
                     ),
                   ),
@@ -2407,14 +2273,14 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                       width: 9,
                       height: 9,
                       decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
+                        color: PixelTheme.bgSurface,
                         borderRadius: const BorderRadius.only(
                           topLeft: Radius.circular(4.5),
                           topRight: Radius.circular(4.5),
                           bottomLeft: Radius.circular(4.5),
                           bottomRight: Radius.zero,
                         ),
-                        border: Border.all(color: isDark ? Colors.white : const Color(0xFF1C1917), width: 1.0),
+                        border: Border.all(color: PixelTheme.textPrimary, width: 1.0),
                       ),
                     ),
                   ),
@@ -2422,58 +2288,53 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
               ),
               const SizedBox(width: 8),
               Text(
-                'Citizen Report Marker',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: isDark ? Colors.white : const Color(0xFF1C1917)),
+                tr('map_citizen_report_marker'),
+                style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600),
               ),
             ],
           ),
           const SizedBox(height: 10),
-          // Row 2: Status dots part 1
+          // Row 2: Status dots — matches the one shared status→color mapping
+          // used everywhere else (map pins, dashboard, history, detail).
           Row(
             children: [
-              Expanded(child: _legendItem(const Color(0xFFEF4444), 'Pending Alert', isDark)),
-              Expanded(child: _legendItem(const Color(0xFFF59E0B), 'In Review', isDark)),
+              Expanded(child: _legendItem(getStatusConfig('Pending').color, tr('map_legend_pending_alert'))),
+              Expanded(child: _legendItem(getStatusConfig('In Review').color, tr('map_legend_in_progress'))),
             ],
           ),
           const SizedBox(height: 8),
-          // Row 3: Status dots part 2
           Row(
             children: [
-              Expanded(child: _legendItem(const Color(0xFF3B82F6), 'In Maintenance', isDark)),
-              Expanded(child: _legendItem(const Color(0xFF10B981), 'Resolved', isDark)),
+              Expanded(child: _legendItem(getStatusConfig('Resolved').color, trStatus('Resolved'))),
+              Expanded(child: _legendItem(getStatusConfig('Rejected').color, trStatus('Rejected'))),
             ],
           ),
           const SizedBox(height: 10),
-          Divider(color: isDark ? Colors.white12 : const Color(0xFFE7E5E4), height: 1),
+          const Divider(color: PixelTheme.bgBorder, height: 1),
           const SizedBox(height: 10),
           Text(
-            'CATEGORY COLORS',
-            style: TextStyle(
-              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
-              fontSize: 9,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.0,
-            ),
+            tr('map_category_colors'),
+            style: PixelTheme.pixelCaption(fontSize: 7, color: PixelTheme.textSecondary),
           ),
           const SizedBox(height: 8),
           Row(
             children: [
-              Expanded(child: _legendNeonItem(const Color(0xFFFF6B35), 'Road/Damage', isDark)),
-              Expanded(child: _legendNeonItem(const Color(0xFFFFE135), 'Lighting', isDark)),
+              Expanded(child: _legendNeonItem(_getCategoryNeonColor('Road Damage'), tr('map_legend_road_damage'))),
+              Expanded(child: _legendNeonItem(_getCategoryNeonColor('Street Lighting'), tr('map_legend_lighting'))),
             ],
           ),
           const SizedBox(height: 6),
           Row(
             children: [
-              Expanded(child: _legendNeonItem(const Color(0xFF39FF14), 'Waste', isDark)),
-              Expanded(child: _legendNeonItem(const Color(0xFF00CFFF), 'Drainage', isDark)),
+              Expanded(child: _legendNeonItem(_getCategoryNeonColor('Waste Management'), tr('map_legend_waste'))),
+              Expanded(child: _legendNeonItem(_getCategoryNeonColor('Drainage'), trCategory('Drainage'))),
             ],
           ),
           const SizedBox(height: 6),
           Row(
             children: [
-              Expanded(child: _legendNeonItem(const Color(0xFFDA00FF), 'Noise', isDark)),
-              Expanded(child: _legendNeonItem(const Color(0xFFFF2D78), 'Other', isDark)),
+              Expanded(child: _legendNeonItem(_getCategoryNeonColor('Noise'), tr('map_legend_noise'))),
+              Expanded(child: _legendNeonItem(_getCategoryNeonColor('Other'), trCategory('Other'))),
             ],
           ),
         ],
@@ -2485,24 +2346,20 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     return SizedBox(
       height: 40,
       child: GlassCard(
-        color: isDark ? const Color(0xFF0F0F0F).withOpacity(0.9) : Colors.white.withOpacity(0.95),
-        borderColor: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
+        color: PixelTheme.bgSurface,
+        borderColor: PixelTheme.bgBorder,
         padding: const EdgeInsets.symmetric(horizontal: 14),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(6),
         child: InkWell(
           onTap: () => setState(() => _showLegend = true),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.info_outline_rounded, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 18),
+              const Icon(Icons.info_outline_rounded, color: PixelTheme.accentOrange, size: 18),
               const SizedBox(width: 8),
               Text(
-                'Show Legend',
-                style: TextStyle(
-                  color: isDark ? Colors.white : const Color(0xFF1C1917),
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
+                tr('map_show_legend'),
+                style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textPrimary, fontWeight: FontWeight.bold),
               ),
             ],
           ),
@@ -2511,7 +2368,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     );
   }
 
-  Widget _legendItem(Color color, String label, bool isDark) {
+  Widget _legendItem(Color color, String label) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -2534,7 +2391,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
         Expanded(
           child: Text(
             label,
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: isDark ? Colors.white : const Color(0xFF1C1917)),
+            style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -2543,7 +2400,7 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
     );
   }
 
-  Widget _legendNeonItem(Color neonColor, String label, bool isDark) {
+  Widget _legendNeonItem(Color neonColor, String label) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -2551,27 +2408,16 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
           width: 10,
           height: 10,
           decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
+            color: PixelTheme.bgSurface,
             borderRadius: BorderRadius.circular(2),
             border: Border.all(color: neonColor, width: 1.5),
-            boxShadow: isDark ? [
-              BoxShadow(
-                color: neonColor.withOpacity(0.5),
-                blurRadius: 4,
-                spreadRadius: 0.5,
-              )
-            ] : [],
           ),
         ),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
             label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: isDark ? Colors.white70 : const Color(0xFF44403C),
-            ),
+            style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary, fontWeight: FontWeight.w600),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),

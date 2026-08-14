@@ -1,14 +1,24 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../pixel_theme.dart';
+import '../widgets/pixel_widgets.dart';
 import '../services/api_service.dart';
 import '../user_session.dart';
 import 'login_screen.dart';
 import '../widgets/glass_card.dart';
+import '../localization/app_strings.dart';
+import '../localization/locale_manager.dart';
+import '../notification_settings.dart';
 
 /// Profile screen.
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  /// Called when the "Total Reports" stat is tapped, so Home can switch to
+  /// History instead of just telling the user to do it themselves.
+  final VoidCallback? onViewReportsTap;
+
+  const ProfileScreen({super.key, this.onViewReportsTap});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -79,61 +89,126 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _logout() async {
-    final confirmed = await showDialog<bool>(
+    PixelDialog.show(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text('Log Out',
-            style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917))),
-        content: const Text('Are you sure you want to log out?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
-            child: const Text('Log Out'),
-          ),
-        ],
-      ),
+      title: tr('profile_signout_title'),
+      bodyText: tr('profile_signout_body'),
+      cancelText: tr('common_cancel'),
+      confirmText: tr('profile_signout_confirm'),
+      headerColor: PixelTheme.alertRed,
+      confirmButtonColor: PixelTheme.alertRed,
+      onConfirm: () async {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('user_id');
+        await prefs.remove('username');
+        await prefs.remove('role');
+        await prefs.remove('token');
+        await prefs.remove('full_name');
+        await prefs.remove('ic_number');
+        await prefs.remove('phone_number');
+        await prefs.remove('email');
+        UserSession.instance.clear();
+
+        if (mounted) {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+            (route) => false,
+          );
+        }
+      },
     );
+  }
 
-    if (confirmed != true || !mounted) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('user_id');
-    await prefs.remove('username');
-    await prefs.remove('role');
-    await prefs.remove('token');
-    await prefs.remove('full_name');
-    await prefs.remove('ic_number');
-    await prefs.remove('phone_number');
-    await prefs.remove('email');
-    UserSession.instance.clear();
-
-    if (mounted) {
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-        (route) => false,
-      );
+  Future<void> _pickCustomPhoto() async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(source: ImageSource.gallery, maxWidth: 600, maxHeight: 600, imageQuality: 85);
+      if (picked != null) {
+        final bytes = await picked.readAsBytes();
+        final base64Str = base64Encode(bytes);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('custom_photo_base64', base64Str);
+        await prefs.remove('avatar_index');
+        setState(() {
+          UserSession.instance.customPhotoBase64 = base64Str;
+          UserSession.instance.avatarIndex = null;
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(tr('profile_photo_updated')),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[Profile] Error picking photo: $e');
     }
+  }
+
+  Future<void> _showAvatarOptionsModal() async {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: PixelTheme.bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.photo_library_outlined, color: PixelTheme.accentOrange),
+                  title: Text(tr('profile_upload_own_photo'), style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textPrimary)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _pickCustomPhoto();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.grid_view_rounded, color: PixelTheme.accentCyan),
+                  title: Text(tr('profile_choose_preset_avatar'), style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textPrimary)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showAvatarSelectionDialog();
+                  },
+                ),
+                if (UserSession.instance.customPhotoBase64 != null)
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                    title: Text(tr('profile_remove_custom_photo'), style: PixelTheme.pixelBody(fontSize: 14, color: Colors.redAccent)),
+                    onTap: () async {
+                      Navigator.pop(context);
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.remove('custom_photo_base64');
+                      setState(() {
+                        UserSession.instance.customPhotoBase64 = null;
+                      });
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _showAvatarSelectionDialog() async {
     final selectedIndex = await showDialog<int>(
       context: context,
       builder: (BuildContext context) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
         return AlertDialog(
-          backgroundColor: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+          backgroundColor: PixelTheme.bgSurface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
           title: Text(
-            'Choose Avatar',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: isDark ? Colors.white : const Color(0xFF1C1917),
-            ),
+            tr('profile_choose_preset_avatar'),
+            style: PixelTheme.pixelHeading(fontSize: 16, color: PixelTheme.textPrimary),
           ),
           content: SizedBox(
             width: double.maxFinite,
@@ -149,9 +224,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               itemBuilder: (context, index) {
                 final avatarIdx = index + 1;
                 final avatarPath = 'assets/avatars/avatar_$avatarIdx.png';
-                final isCurrent = UserSession.instance.avatarIndex == avatarIdx ||
-                    (UserSession.instance.avatarIndex == null &&
-                        getAvatarPath(_username) == avatarPath);
+                final isCurrent = UserSession.instance.avatarIndex == avatarIdx;
 
                 return GestureDetector(
                   onTap: () => Navigator.pop(context, avatarIdx),
@@ -159,9 +232,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: isCurrent
-                            ? (isDark ? Colors.white : const Color(0xFF0D9488))
-                            : Colors.transparent,
+                        color: isCurrent ? PixelTheme.accentOrange : Colors.transparent,
                         width: 3.0,
                       ),
                     ),
@@ -182,7 +253,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
+              child: Text(tr('common_cancel')),
             ),
           ],
         );
@@ -192,16 +263,116 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (selectedIndex != null && mounted) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt('avatar_index', selectedIndex);
+      await prefs.remove('custom_photo_base64');
       setState(() {
         UserSession.instance.avatarIndex = selectedIndex;
+        UserSession.instance.customPhotoBase64 = null;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Avatar updated successfully!'),
+        SnackBar(
+          content: Text(tr('profile_avatar_updated')),
           behavior: SnackBarBehavior.floating,
         ),
       );
     }
+  }
+
+  void _showEditProfileModal() {
+    final usernameCtrl = TextEditingController(text: UserSession.instance.username);
+    final fullNameCtrl = TextEditingController(text: UserSession.instance.fullName);
+    final icNumberCtrl = TextEditingController(text: UserSession.instance.icNumber);
+    final phoneCtrl    = TextEditingController(text: UserSession.instance.phoneNumber);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: PixelTheme.bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  tr('profile_edit_details_title'),
+                  style: PixelTheme.pixelHeading(fontSize: 17, color: PixelTheme.primaryGreen),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: usernameCtrl,
+                  decoration: InputDecoration(labelText: tr('field_username_label')),
+                  style: const TextStyle(color: PixelTheme.textPrimary),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: fullNameCtrl,
+                  decoration: InputDecoration(labelText: tr('field_full_name_label')),
+                  style: const TextStyle(color: PixelTheme.textPrimary),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: icNumberCtrl,
+                  decoration: InputDecoration(labelText: tr('field_ic_number_label')),
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(color: PixelTheme.textPrimary),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: phoneCtrl,
+                  decoration: InputDecoration(labelText: tr('field_phone_number_label')),
+                  keyboardType: TextInputType.phone,
+                  style: const TextStyle(color: PixelTheme.textPrimary),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () async {
+                    final newUsername = usernameCtrl.text.trim();
+                    final newFullName = fullNameCtrl.text.trim();
+                    final newIc       = icNumberCtrl.text.trim();
+                    final newPhone    = phoneCtrl.text.trim();
+
+                    if (newUsername.isEmpty) return;
+
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setString('username', newUsername);
+                    await prefs.setString('full_name', newFullName);
+                    await prefs.setString('ic_number', newIc);
+                    await prefs.setString('phone_number', newPhone);
+
+                    setState(() {
+                      UserSession.instance.username    = newUsername;
+                      UserSession.instance.fullName    = newFullName;
+                      UserSession.instance.icNumber    = newIc;
+                      UserSession.instance.phoneNumber = newPhone;
+                    });
+
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: PixelTheme.accentOrange,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: Text(tr('common_save_changes')),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -210,7 +381,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return const Scaffold(
         backgroundColor: Colors.transparent,
         body: Center(
-          child: CircularProgressIndicator(color: Colors.white),
+          child: CircularProgressIndicator(color: PixelTheme.accentOrange),
         ),
       );
     }
@@ -229,24 +400,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Stack(
                     children: [
                       GestureDetector(
-                        onTap: _showAvatarSelectionDialog,
+                        onTap: _showAvatarOptionsModal,
                         child: Container(
-                          width: 90,
-                          height: 90,
-                          decoration: BoxDecoration(
+                          width: 96,
+                          height: 96,
+                          decoration: const BoxDecoration(
                             shape: BoxShape.circle,
-                            color: Colors.white,
-                            border: Border.all(
-                              color: Theme.of(context).brightness == Brightness.dark
-                                  ? Colors.white
-                                  : const Color(0xFFD6D3D1),
-                              width: 2.0,
-                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Color(0x40E08A5B),
+                                blurRadius: 16,
+                                spreadRadius: 2,
+                              ),
+                            ],
                           ),
-                          child: ClipOval(
-                            child: Image.asset(
-                              getAvatarPath(_username),
-                              fit: BoxFit.cover,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: PixelTheme.accentOrange, width: 2.5),
+                            ),
+                            child: ClipOval(
+                              child: getAvatarImageWidget(_username),
                             ),
                           ),
                         ),
@@ -255,22 +429,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         bottom: 0,
                         right: 0,
                         child: GestureDetector(
-                          onTap: _showAvatarSelectionDialog,
+                          onTap: _showAvatarOptionsModal,
                           child: Container(
-                            padding: const EdgeInsets.all(4),
+                            padding: const EdgeInsets.all(6),
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: Theme.of(context).brightness == Brightness.dark
-                                  ? Colors.white
-                                  : const Color(0xFF0D9488),
+                              color: PixelTheme.accentOrange,
                               border: Border.all(color: Colors.white, width: 1.5),
                             ),
-                            child: Icon(
-                              Icons.edit,
+                            child: const Icon(
+                              Icons.camera_alt_outlined,
                               size: 14,
-                              color: Theme.of(context).brightness == Brightness.dark
-                                  ? Colors.black
-                                  : Colors.white,
+                              color: Colors.white,
                             ),
                           ),
                         ),
@@ -279,25 +449,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 16),
                   Text(_username,
-                      style: TextStyle(
-                          color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917),
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold)),
+                      style: PixelTheme.pixelHeading(fontSize: 18, color: PixelTheme.textPrimary)),
                   const SizedBox(height: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                     decoration: BoxDecoration(
-                      color: Theme.of(context).brightness == Brightness.dark ? Colors.black : const Color(0xFFF5F5F4),
+                      color: PixelTheme.accentOrange.withOpacity(0.12),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? Colors.white30 : const Color(0xFFD6D3D1), width: 1.0),
                     ),
                     child: Text(
-                      _role.toUpperCase(),
-                      style: TextStyle(
-                          color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF78716C),
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.2),
+                      tr('role_${_role.toLowerCase()}'),
+                      style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.accentOrange),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  ElevatedButton.icon(
+                    onPressed: _showEditProfileModal,
+                    icon: const Icon(Icons.edit_outlined, size: 16),
+                    label: Text(tr('profile_edit_profile')),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: PixelTheme.primaryGreen,
+                      elevation: 0,
+                      shadowColor: Colors.transparent,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                     ),
                   ),
                   const SizedBox(height: 28),
@@ -308,15 +484,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         _buildQuickStat(
                           context,
                           '$_totalReports',
-                          _role.toLowerCase().contains('worker') ? 'Active Tasks' : 'Total Reports',
-                          Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0D9488),
+                          _role.toLowerCase().contains('worker') ? tr('profile_active_tasks') : tr('profile_total_reports'),
+                          PixelTheme.accentOrange,
+                          onTap: widget.onViewReportsTap,
                         ),
                         const SizedBox(width: 14),
                         _buildQuickStat(
                           context,
                           '$_resolvedReports',
-                          _role.toLowerCase().contains('worker') ? 'Completed' : 'Resolved',
-                          Theme.of(context).brightness == Brightness.dark ? const Color(0xFF34D399) : const Color(0xFF059669),
+                          _role.toLowerCase().contains('worker') ? tr('profile_completed') : trStatus('Resolved'),
+                          PixelTheme.accentGreen,
                         ),
                       ],
                     ),
@@ -326,68 +503,78 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
 
             // Profile Information section
-            _buildSectionHeader("PROFILE INFORMATION"),
+            _buildSectionHeader(tr('profile_information_section')),
             _buildMenuCard([
               _buildMenuItem(
+                Icons.person_outline,
+                tr('field_username_label'),
+                trailingText: UserSession.instance.username,
+              ),
+              _buildMenuItem(
                 Icons.badge_outlined,
-                "Full Name",
+                tr('field_full_name_label'),
                 trailingText: UserSession.instance.fullName.isEmpty
-                    ? "N/A"
+                    ? tr('common_not_available')
                     : UserSession.instance.fullName,
               ),
               _buildMenuItem(
                 Icons.fingerprint_rounded,
-                "IC Number",
+                tr('field_ic_number_label'),
                 trailingText: UserSession.instance.icNumber.isEmpty
-                    ? "N/A"
+                    ? tr('common_not_available')
                     : UserSession.instance.icNumber,
               ),
               _buildMenuItem(
                 Icons.phone_outlined,
-                "Phone Number",
+                tr('field_phone_number_label'),
                 trailingText: UserSession.instance.phoneNumber.isEmpty
-                    ? "N/A"
+                    ? tr('common_not_available')
                     : UserSession.instance.phoneNumber,
               ),
-
             ]),
 
             // Preferences section
-            _buildSectionHeader("PREFERENCES"),
+            _buildSectionHeader(tr('profile_preferences_section')),
             _buildMenuCard([
-              _buildMenuItem(Icons.language_rounded, "Language",
-                  trailingText: "English", onTap: () {
-                _showInfoDialog("Language",
-                    "Language selection will be available in the next update.");
-              }),
-              _buildMenuItem(Icons.notifications_none_rounded, "Notifications",
-                  trailingText: "Enabled", onTap: () {
-                _showInfoDialog("Notifications",
-                    "Notification settings will be available soon.");
-              }),
-            ]),
-
-            // Activity section
-            _buildSectionHeader("ACTIVITY"),
-            _buildMenuCard([
-              _buildMenuItem(Icons.description_outlined, "My Reports",
-                  trailingText: '$_totalReports', onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text(
-                      'Use the History tab at the bottom to view your reports.'),
-                  behavior: SnackBarBehavior.floating,
-                ));
-              }),
+              ValueListenableBuilder<String>(
+                valueListenable: LocaleManager.localeNotifier,
+                builder: (context, locale, _) => _buildMenuItem(
+                  Icons.language_rounded,
+                  tr('profile_language'),
+                  trailingText: locale == 'bm' ? tr('profile_language_bm') : tr('profile_language_en'),
+                  onTap: () => LocaleManager.toggleLocale(),
+                ),
+              ),
+              ValueListenableBuilder<bool>(
+                valueListenable: NotificationSettings.enabledNotifier,
+                builder: (context, enabled, _) => ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: PixelTheme.accentOrange.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.notifications_none_rounded, color: PixelTheme.accentOrange, size: 18),
+                  ),
+                  title: Text(tr('profile_notifications'),
+                      style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600)),
+                  trailing: Switch.adaptive(
+                    value: enabled,
+                    activeTrackColor: PixelTheme.accentOrange,
+                    onChanged: (_) => NotificationSettings.toggle(),
+                  ),
+                ),
+              ),
             ]),
 
             // About section
-            _buildSectionHeader("ABOUT"),
+            _buildSectionHeader(tr('profile_about_section')),
             _buildMenuCard([
-              _buildMenuItem(Icons.shield_outlined, "Privacy Policy", onTap: () {
-                _showInfoDialog("Privacy Policy",
-                    "Privacy Policy details will be updated shortly.");
+              _buildMenuItem(Icons.shield_outlined, tr('profile_privacy_policy'), onTap: () {
+                _showInfoDialog(tr('profile_privacy_policy'), tr('profile_privacy_policy_body'));
               }),
-              _buildMenuItem(Icons.info_outline_rounded, "About App",
+              _buildMenuItem(Icons.info_outline_rounded, tr('profile_about_app'),
                   trailingText: "v1.1.0", onTap: () {
                 showAboutDialog(
                   context: context,
@@ -401,31 +588,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
             // Log out button
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
-              child: OutlinedButton(
+              child: PixelButton(
+                text: tr('profile_log_out'),
+                color: PixelTheme.alertRed,
+                icon: Icons.logout_rounded,
+                height: 54,
+                fontSize: 12,
                 onPressed: _logout,
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 54),
-                  side: const BorderSide(color: Colors.redAccent, width: 1.0),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
-                  backgroundColor: Colors.redAccent.withOpacity(0.05),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.logout_rounded, color: Colors.redAccent, size: 18),
-                    SizedBox(width: 8),
-                    Text("LOG OUT",
-                        style: TextStyle(
-                            color: Colors.redAccent,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                            letterSpacing: 0.5)),
-                  ],
-                ),
               ),
             ),
-            const SizedBox(height: 120), // padding for floating bottom navigation bar
+            const SizedBox(height: 140), // padding for floating bottom navigation bar
           ],
         ),
       ),
@@ -434,42 +606,60 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  Widget _buildQuickStat(BuildContext context, String value, String label, Color accentColor) {
+  Widget _buildQuickStat(BuildContext context, String value, String label, Color accentColor, {VoidCallback? onTap}) {
     return Expanded(
-      child: Container(
-        margin: EdgeInsets.zero,
-        child: SizedBox(
-          width: double.infinity,
-          child: GlassCard(
-            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-            margin: EdgeInsets.zero,
-            borderRadius: BorderRadius.circular(8),
-            borderColor: Theme.of(context).brightness == Brightness.dark ? Colors.white24 : const Color(0xFFE7E5E4),
-            child: Column(
-              children: [
-                Text(
-                  value,
-                  style: TextStyle(
-                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917),
-                    fontSize: 22,
-                    fontWeight: FontWeight.w900,
-                  ),
+      child: GestureDetector(
+        onTap: onTap,
+        child: PixelCard(
+          padding: EdgeInsets.zero,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: accentColor.withOpacity(0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        onTap != null ? Icons.assignment_rounded : Icons.check_circle_rounded,
+                        color: accentColor,
+                        size: 17,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      value,
+                      style: PixelTheme.pixelHeading(fontSize: 20, color: PixelTheme.textPrimary),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          label,
+                          style: PixelTheme.pixelCaption(fontSize: 11, color: PixelTheme.textSecondary),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (onTap != null) ...[
+                          const SizedBox(width: 4),
+                          const Icon(Icons.chevron_right_rounded, size: 12, color: PixelTheme.textMuted),
+                        ],
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  label.toUpperCase(),
-                  style: TextStyle(
-                    color: Theme.of(context).brightness == Brightness.dark ? Colors.grey : const Color(0xFF78716C),
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.8,
-                  ),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -480,12 +670,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Container(
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.fromLTRB(24, 24, 20, 10),
-      child: Text(title,
-          style: TextStyle(
-              color: Theme.of(context).brightness == Brightness.dark ? Colors.white70 : const Color(0xFF78716C),
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.1)),
+      child: Text(title, style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.textSecondary)),
     );
   }
 
@@ -505,24 +690,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
       leading: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: Theme.of(context).brightness == Brightness.dark ? Colors.black : const Color(0xFFF5F5F4),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? Colors.white24 : const Color(0xFFD6D3D1), width: 1.5),
+          color: PixelTheme.accentOrange.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(12),
         ),
-        child: Icon(icon, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0D9488), size: 18),
+        child: Icon(icon, color: PixelTheme.accentOrange, size: 18),
       ),
       title: Text(title,
-          style:
-              TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917))),
+          style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600)),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (trailingText != null)
             Text(trailingText,
-                style: TextStyle(color: Theme.of(context).brightness == Brightness.dark ? Colors.grey : const Color(0xFF78716C), fontSize: 13, fontWeight: FontWeight.w500)),
+                style: PixelTheme.pixelBody(color: PixelTheme.textSecondary, fontSize: 13, fontWeight: FontWeight.w500)),
           if (onTap != null) ...[
             const SizedBox(width: 4),
-            Icon(Icons.chevron_right_rounded, color: Theme.of(context).brightness == Brightness.dark ? Colors.white30 : const Color(0xFFA8A29E), size: 20),
+            const Icon(Icons.chevron_right_rounded, color: PixelTheme.textMuted, size: 20),
           ],
         ],
       ),
@@ -534,14 +717,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
+        backgroundColor: PixelTheme.bgSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
         title: Text(title,
-            style: TextStyle(
-                fontWeight: FontWeight.bold, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917))),
-        content: Text(message),
+            style: PixelTheme.pixelHeading(fontSize: 16, color: PixelTheme.textPrimary)),
+        content: Text(message, style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textSecondary)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text("OK"),
+            child: Text(tr('common_ok')),
           ),
         ],
       ),

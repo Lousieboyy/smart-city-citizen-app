@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
+
 /// UserSession — lightweight singleton that holds the logged-in user's state.
 ///
 /// WHY: The original code read user_id / username from SharedPreferences in
@@ -20,6 +23,7 @@ class UserSession {
   
   // Customizable profile state variables
   int?   avatarIndex;
+  String? customPhotoBase64;
   String fullName = '';
   String icNumber = '';
   String phoneNumber = '';
@@ -33,6 +37,7 @@ class UserSession {
     required String userRole,
     String?         jwtToken,
     int?            customAvatarIndex,
+    String?         userCustomPhotoBase64,
     String?         userFullName,
     String?         userIcNumber,
     String?         userPhoneNumber,
@@ -43,6 +48,7 @@ class UserSession {
     role        = userRole;
     token       = jwtToken;
     avatarIndex = customAvatarIndex;
+    customPhotoBase64 = userCustomPhotoBase64;
     fullName    = userFullName    ?? name;
     icNumber    = userIcNumber    ?? '';
     phoneNumber = userPhoneNumber ?? '';
@@ -55,6 +61,7 @@ class UserSession {
     role        = 'citizen';
     token       = null;
     avatarIndex = null;
+    customPhotoBase64 = null;
     fullName    = '';
     icNumber    = '';
     phoneNumber = '';
@@ -75,4 +82,16 @@ String getAvatarPath(String username) {
   }
   final index = (hash.abs() % 18) + 1;
   return 'assets/avatars/avatar_$index.png';
+}
+
+/// Renders either custom Base64 uploaded photo or preset avatar image.
+Widget getAvatarImageWidget(String username) {
+  final session = UserSession.instance;
+  if (session.customPhotoBase64 != null && session.customPhotoBase64!.isNotEmpty) {
+    try {
+      final bytes = base64Decode(session.customPhotoBase64!);
+      return Image.memory(bytes, fit: BoxFit.cover);
+    } catch (_) {}
+  }
+  return Image.asset(getAvatarPath(username), fit: BoxFit.cover);
 }

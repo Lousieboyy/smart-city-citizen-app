@@ -43,6 +43,9 @@ dependencies:
   geocoding: ^4.0.0
   flutter_map_heatmap: ^0.0.8
   flutter_local_notifications: ^22.0.1
+  # Pinned >=8.x: 6.2.1 crashes on startup against Flutter 3.38's SDK — it
+  # probes the legacy AssetManifest.json, which this engine no longer emits.
+  google_fonts: ^8.2.1
   url_launcher: ^6.3.2
 
 dev_dependencies:

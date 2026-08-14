@@ -35,8 +35,9 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
   bool _localNotifInitialized = false;
 
-  /// Initialize local system notifications
+  /// Initialize local system notifications safely
   Future<void> initializeLocalNotifications() async {
+    if (kIsWeb || defaultTargetPlatform == TargetPlatform.windows || defaultTargetPlatform == TargetPlatform.linux) return; // Skip native notifications on Web and Desktop to prevent platform setup errors
     if (_localNotifInitialized) return;
 
     const AndroidInitializationSettings initializationSettingsAndroid =
@@ -57,7 +58,6 @@ class NotificationService {
     try {
       await _localNotifications.initialize(settings: initializationSettings);
       
-      // Request permissions for Android 13+
       await _localNotifications
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>()
@@ -76,6 +76,7 @@ class NotificationService {
     required String title,
     required String body,
   }) async {
+    if (kIsWeb) return; // Skip native notifications on Web
     await initializeLocalNotifications();
 
     const AndroidNotificationDetails androidNotificationDetails =
@@ -167,13 +168,11 @@ class NotificationService {
         final status = (report['status'] as String?) ?? 'Pending';
         currentStatuses[id] = status;
 
-        // If we have a previous snapshot, compare
         if (_lastKnownStatuses.containsKey(id)) {
           final prev = _lastKnownStatuses[id]!;
           if (prev != status) {
             final cat = (report['categories'] as String?) ?? 'Report';
             
-            // Emit in-app event
             _controller.add(StatusChange(
               reportId:  id,
               category:  cat,
@@ -181,7 +180,6 @@ class NotificationService {
               newStatus: status,
             ));
             
-            // Trigger system-level notification
             showLocalNotification(
               id: id,
               title: "Report Status Updated",
@@ -193,11 +191,9 @@ class NotificationService {
         }
       }
 
-      // Update snapshot (only after first poll so we don't fire on startup)
       if (_lastKnownStatuses.isNotEmpty) {
         _lastKnownStatuses = currentStatuses;
       } else {
-        // First poll — store baseline without firing notifications
         _lastKnownStatuses = currentStatuses;
       }
     } catch (e) {

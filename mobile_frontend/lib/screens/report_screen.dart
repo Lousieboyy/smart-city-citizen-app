@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -12,6 +11,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/background_decorator.dart';
+import '../pixel_theme.dart';
+import '../widgets/pixel_widgets.dart';
+import '../localization/app_strings.dart';
 
 /// Citizen report submission screen.
 class CitizenReportScreen extends StatefulWidget {
@@ -23,7 +25,7 @@ class CitizenReportScreen extends StatefulWidget {
 
 class _CitizenReportScreenState extends State<CitizenReportScreen> {
   // ── Image state ──────────────────────────────────────────────────────────
-  File?      _image;
+  XFile?     _pickedFile;
   Uint8List? _imageBytes;
   final ImagePicker _picker = ImagePicker();
 
@@ -47,7 +49,26 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   String? _address;
   double? _latitude;
   double? _longitude;
-  String _locationDisplay = 'Fetching location…';
+  String _locationDisplay = 'Fetching location…'; // internal sentinel — see _locationLine for display text
+
+  // Display text for _locationDisplay/_address — these fields hold English
+  // sentinel values used for internal state comparisons (e.g. _step4Done),
+  // so the sentinels themselves stay untranslated; only what's shown here
+  // is localized.
+  String get _locationLine {
+    switch (_locationDisplay) {
+      case 'Fetching location…':      return tr('report_fetching_location');
+      case 'Location permission denied': return tr('report_location_permission_denied');
+      case 'Location unavailable':    return tr('report_location_unavailable');
+      default: return _locationDisplay;
+    }
+  }
+
+  String get _addressLine {
+    if (_address == null) return tr('report_fetching_address');
+    if (_address == 'Unknown location') return tr('report_address_unknown');
+    return _address!;
+  }
 
   // ── Category definitions ──────────────────────────────────────────────────
   static const _categories = [
@@ -63,10 +84,15 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   void initState() {
     super.initState();
     _initLocation();
+    // Keeps the step-progress tracker accurate as the user types.
+    _descriptionController.addListener(_onDescriptionChanged);
   }
+
+  void _onDescriptionChanged() => setState(() {});
 
   @override
   void dispose() {
+    _descriptionController.removeListener(_onDescriptionChanged);
     _descriptionController.dispose();
     super.dispose();
   }
@@ -89,8 +115,8 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       _latitude  = pos.latitude;
       _longitude = pos.longitude;
 
-      final gpsString = 'Lat: ${pos.latitude.toStringAsFixed(4)}, '
-          'Lon: ${pos.longitude.toStringAsFixed(4)}';
+      final gpsString = '${tr('report_lat_label')}: ${pos.latitude.toStringAsFixed(4)}, '
+          '${tr('report_lon_label')}: ${pos.longitude.toStringAsFixed(4)}';
       String resolved = gpsString;
 
       try {
@@ -146,8 +172,8 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
     final bytes = await picked.readAsBytes();
 
     setState(() {
-      _image      = File(picked.path);
-      _imageBytes = bytes;
+      _pickedFile  = picked;
+      _imageBytes  = bytes;
       _isAnalyzing = true;
       _selectedCategories.clear();
       _confidence  = null;
@@ -159,24 +185,21 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   void _showImageSourceDialog() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
-    final surfaceColor = isDark ? const Color(0xFF0F0F0F) : Colors.white;
-
     showModalBottomSheet(
       context: context,
-      backgroundColor: surfaceColor,
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            const SizedBox(height: 8),
             ListTile(
-              leading: Icon(Icons.photo_library_outlined, color: primaryColor),
+              leading: const Icon(Icons.photo_library_outlined, color: PixelTheme.primaryGreen),
               title: Text(
-                'Choose from Gallery',
-                style: TextStyle(color: primaryColor, fontWeight: FontWeight.w500),
+                tr('report_choose_gallery'),
+                style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600),
               ),
               onTap: () {
                 Navigator.pop(context);
@@ -184,10 +207,10 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
               },
             ),
             ListTile(
-              leading: Icon(Icons.camera_alt_outlined, color: primaryColor),
+              leading: const Icon(Icons.camera_alt_outlined, color: PixelTheme.primaryGreen),
               title: Text(
-                'Take a Photo',
-                style: TextStyle(color: primaryColor, fontWeight: FontWeight.w500),
+                tr('report_take_photo'),
+                style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600),
               ),
               onTap: () {
                 Navigator.pop(context);
@@ -298,9 +321,23 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
             _selectedCategories.add('Other');
           }
         });
+      } else if (response.statusCode == 401) {
+        debugPrint('[AI] Classification failed: session expired (401)');
+        if (mounted) {
+          _showSnack(tr('report_session_expired'), isError: true);
+        }
+      } else {
+        final body = await response.stream.bytesToString();
+        debugPrint('[AI] Classification failed: ${response.statusCode} $body');
+        if (mounted) {
+          _showSnack(tr('report_ai_scan_failed').replaceAll('{code}', response.statusCode.toString()), isError: true);
+        }
       }
     } catch (e) {
       debugPrint('[AI] Classification error: $e');
+      if (mounted) {
+        _showSnack(tr('report_ai_unreachable'), isError: true);
+      }
     } finally {
       if (mounted) setState(() => _isAnalyzing = false);
     }
@@ -308,16 +345,16 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
 
   // ── Submission ────────────────────────────────────────────────────────────
   Future<void> _submitReport() async {
-    if (_image == null) {
-      _showSnack('Please select an image first.', isError: true);
+    if (_imageBytes == null && _pickedFile == null) {
+      _showSnack(tr('report_error_no_image'), isError: true);
       return;
     }
     if (_isAnalyzing) {
-      _showSnack('Please wait for AI analysis to finish.', isError: true);
+      _showSnack(tr('report_error_analyzing'), isError: true);
       return;
     }
     if (_selectedCategories.isEmpty) {
-      _showSnack('Please select at least one category.', isError: true);
+      _showSnack(tr('report_error_no_category'), isError: true);
       return;
     }
     if (!_formKey.currentState!.validate()) return;
@@ -350,7 +387,7 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           if (data['duplicate'] == true && data['matches'] != null && (data['matches'] as List).isNotEmpty) {
             final duplicateReport = data['matches'][0];
             final int duplicateId = duplicateReport['id'];
-            final String dupAddress = duplicateReport['address'] ?? 'Nearby location';
+            final String dupAddress = duplicateReport['address'] ?? tr('report_nearby_location');
             final double dupDist = (duplicateReport['distance_meters'] as num?)?.toDouble() ?? 0.0;
             
             final bool? upvoteResult = await _showDuplicateWarningDialog(dupAddress, dupDist, duplicateId);
@@ -386,77 +423,71 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
         if (_longitude != null) 'longitude': _longitude!.toString(),
       };
 
-      final response = kIsWeb
-          ? await ApiService.submitReportBytes(
-              fields, _imageBytes!, _image!.path.split('/').last)
-          : await ApiService.submitReport(fields, _image!.path);
+      final imageName = _pickedFile?.name ?? 'upload.jpg';
+      final response = (_imageBytes != null)
+          ? await ApiService.submitReportBytes(fields, _imageBytes!, imageName)
+          : await ApiService.submitReport(fields, _pickedFile!.path);
 
       if (response.statusCode == 200) {
         if (mounted) {
-          _showSnack('Report submitted successfully!', isError: false);
+          _showSnack(tr('report_submit_success'), isError: false);
           Navigator.pop(context, true);
         }
       } else {
-        if (mounted) _showSnack('Failed to submit report.', isError: true);
+        if (mounted) _showSnack(tr('report_submit_failed'), isError: true);
       }
     } catch (e) {
-      if (mounted) _showSnack('Error: $e', isError: true);
+      if (mounted) _showSnack('${tr('report_error_prefix')}$e', isError: true);
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
   void _showSnack(String message, {required bool isError}) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(
         message,
-        style: TextStyle(color: isDark && !isError ? Colors.black : Colors.white, fontWeight: FontWeight.w500),
+        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
       ),
-      backgroundColor: isError ? const Color(0xFFEF4444) : (isDark ? Colors.white : const Color(0xFF0D9488)),
+      backgroundColor: isError ? PixelTheme.alertRed : PixelTheme.accentGreen,
       behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ));
   }
 
   void _enhanceDescription() {
     if (_aiRawResult == null || _aiRawResult!.isEmpty) {
-      _showSnack('Please upload an image and run AI scan first.', isError: true);
+      _showSnack(tr('report_enhance_needs_scan'), isError: true);
       return;
     }
-    
+
     final issue = _aiRawResult!.toLowerCase();
     String enhanced = '';
-    
+
     if (issue.contains('pothole')) {
-      enhanced = 'A pothole has been detected in the road. The asphalt has eroded, creating a deep depression that presents a hazard to passing traffic and local drivers.';
+      enhanced = tr('report_enhance_pothole');
     } else if (issue.contains('street light') || issue.contains('lamp')) {
-      enhanced = 'A street light malfunction has been identified. The area is dark at night, causing safety concerns for pedestrians and reducing visibility for drivers.';
+      enhanced = tr('report_enhance_street_light');
     } else if (issue.contains('waste') || issue.contains('dumping') || issue.contains('garbage')) {
-      enhanced = 'Illegal dumping/waste accumulation has been spotted. There is piled garbage that requires urgent removal to prevent sanitation issues and blockages.';
+      enhanced = tr('report_enhance_waste');
     } else if (issue.contains('drainage') || issue.contains('clog') || issue.contains('water')) {
-      enhanced = 'A drainage block or overflow has been detected. Water is pooling, which could lead to flooding and local road hazards.';
+      enhanced = tr('report_enhance_drainage');
     } else if (issue.contains('construction') || issue.contains('road work')) {
-      enhanced = 'Road construction or maintenance work is blocking traffic flow without proper warning signs or safety indicators.';
+      enhanced = tr('report_enhance_construction');
     } else if (issue.contains('tree') || issue.contains('vegetation')) {
-      enhanced = 'Overgrown vegetation or a fallen branch is obstructing the road/sidewalk path, making it difficult for vehicles and pedestrians to pass.';
+      enhanced = tr('report_enhance_vegetation');
     } else {
-      enhanced = 'An issue regarding $_aiRawResult has been detected at this location. Needs municipal attention for maintenance and restoration.';
+      enhanced = tr('report_enhance_generic').replaceAll('{issue}', _aiRawResult!);
     }
-    
+
     setState(() {
       _descriptionController.text = enhanced;
     });
-    
-    _showSnack('AI description generated!', isError: false);
+
+    _showSnack(tr('report_enhance_success'), isError: false);
   }
 
   Future<bool?> _showDuplicateWarningDialog(String address, double distance, int duplicateId) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
-    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
-    final borderColor = isDark ? Colors.white24 : const Color(0xFFE7E5E4);
-    final surfaceColor = isDark ? const Color(0xFF0F0F0F) : Colors.white;
-
     return showDialog<bool?>(
       context: context,
       barrierDismissible: false,
@@ -465,18 +496,17 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor: surfaceColor,
+              backgroundColor: Colors.white,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: borderColor, width: 1.5),
+                borderRadius: BorderRadius.circular(26),
               ),
               title: Row(
                 children: [
-                  const Icon(Icons.warning_amber_rounded, color: Color(0xFFF59E0B), size: 24),
+                  const Icon(Icons.warning_amber_rounded, color: PixelTheme.accentYellow, size: 24),
                   const SizedBox(width: 8),
                   Text(
-                    "Nearby Report Found",
-                    style: TextStyle(color: primaryColor, fontSize: 18, fontWeight: FontWeight.bold),
+                    tr('report_duplicate_title'),
+                    style: PixelTheme.pixelHeading(fontSize: 17, color: PixelTheme.textPrimary),
                   ),
                 ],
               ),
@@ -485,37 +515,31 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    "Our system detected a similar issue already reported nearby:",
-                    style: TextStyle(color: secondaryColor, fontSize: 13),
+                    tr('report_duplicate_body').replaceAll('{distance}', distance.toStringAsFixed(0)),
+                    style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary),
                   ),
                   const SizedBox(height: 12),
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.04),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: borderColor),
+                      color: PixelTheme.bgInput,
+                      borderRadius: BorderRadius.circular(16),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "Location: $address",
-                          style: TextStyle(color: primaryColor, fontSize: 13, fontWeight: FontWeight.w500),
+                          '${tr('report_duplicate_existing_prefix')}$address',
+                          style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          "Distance: ${distance.toStringAsFixed(1)} meters away",
-                          style: TextStyle(color: primaryColor, fontSize: 12, fontWeight: FontWeight.bold),
+                          tr('report_duplicate_distance').replaceAll('{distance}', distance.toStringAsFixed(1)),
+                          style: PixelTheme.pixelBody(fontSize: 12, color: PixelTheme.textPrimary, fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    "Would you like to upvote the existing report to help prioritize it, or submit your report anyway?",
-                    style: TextStyle(color: secondaryColor, fontSize: 13),
                   ),
                 ],
               ),
@@ -523,11 +547,16 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
               actions: [
                 TextButton(
                   onPressed: upvoting ? null : () => Navigator.pop(context, null),
-                  child: Text("Cancel", style: TextStyle(color: secondaryColor)),
+                  child: Text(tr('common_cancel'), style: PixelTheme.pixelBody(color: PixelTheme.textSecondary, fontSize: 14)),
                 ),
-                TextButton(
+                OutlinedButton(
                   onPressed: upvoting ? null : () => Navigator.pop(context, false),
-                  child: const Text("Submit anyway", style: TextStyle(color: Color(0xFFEF4444))),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: PixelTheme.textSecondary,
+                    side: const BorderSide(color: PixelTheme.bgBorder),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                  ),
+                  child: Text(tr('report_duplicate_separately'), style: const TextStyle(fontWeight: FontWeight.w600)),
                 ),
                 ElevatedButton(
                   onPressed: upvoting
@@ -537,23 +566,23 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                           try {
                             final upRes = await ApiService.upvoteReport(duplicateId);
                             if (upRes.statusCode == 200) {
-                              _showSnack('Upvote recorded! Thanks for keeping the reports clean.', isError: false);
+                              _showSnack(tr('report_duplicate_confirmed'), isError: false);
                               if (context.mounted) {
                                 Navigator.pop(context, true);
                               }
                             } else {
-                              _showSnack('Failed to record upvote.', isError: true);
+                              _showSnack(tr('report_duplicate_confirm_failed'), isError: true);
                             }
                           } catch (e) {
-                            _showSnack('Error upvoting: $e', isError: true);
+                            _showSnack('${tr('report_duplicate_confirm_error_prefix')}$e', isError: true);
                           } finally {
                             setDialogState(() => upvoting = false);
                           }
                         },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
-                    foregroundColor: isDark ? Colors.black : Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    backgroundColor: PixelTheme.accentOrange,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                   ),
                   child: upvoting
                       ? const SizedBox(
@@ -561,7 +590,7 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                         )
-                      : const Text("Upvote Existing", style: TextStyle(fontWeight: FontWeight.bold)),
+                      : Text(tr('report_duplicate_confirm_button'), style: const TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ],
             );
@@ -571,12 +600,50 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
     );
   }
 
+  // ── Step-progress tracker ────────────────────────────────────────────────
+  // Real fill-state, not a fake step count — reflects what's actually done.
+  bool get _step1Done => _imageBytes != null || _pickedFile != null;
+  bool get _step2Done => _selectedCategories.isNotEmpty;
+  bool get _step3Done => _descriptionController.text.trim().isNotEmpty;
+  bool get _step4Done => _address != null && _address != 'Unknown location';
+
+  Widget _buildStepTracker() {
+    final steps = [_step1Done, _step2Done, _step3Done, _step4Done];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: Row(
+        children: List.generate(steps.length * 2 - 1, (i) {
+          if (i.isOdd) {
+            final leftDone = steps[(i - 1) ~/ 2];
+            return Expanded(
+              child: Container(
+                height: 3,
+                color: leftDone ? PixelTheme.accentGreen : PixelTheme.bgBorder,
+              ),
+            );
+          }
+          final done = steps[i ~/ 2];
+          return Container(
+            width: 22,
+            height: 22,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: done ? PixelTheme.accentGreen : PixelTheme.bgSurface,
+              shape: BoxShape.circle,
+              border: Border.all(color: done ? PixelTheme.accentGreen : PixelTheme.bgBorder, width: 2),
+            ),
+            child: done
+                ? const Icon(Icons.check_rounded, size: 13, color: Colors.white)
+                : Text('${i ~/ 2 + 1}', style: PixelTheme.pixelCaption(fontSize: 8, color: PixelTheme.textMuted)),
+          );
+        }),
+      ),
+    );
+  }
+
   // ── BUILD ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
-
     return BackgroundDecorator(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -585,39 +652,55 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           elevation: 0,
           scrolledUnderElevation: 0.5,
           title: Text(
-            "Report an Issue",
-            style: TextStyle(
-                color: primaryColor, fontWeight: FontWeight.bold, fontSize: 18),
+            tr('report_title'),
+            style: PixelTheme.pixelHeading(fontSize: 17, color: PixelTheme.primaryGreen),
           ),
-          iconTheme: IconThemeData(color: primaryColor),
+          iconTheme: const IconThemeData(color: PixelTheme.primaryGreen),
         ),
         body: Form(
           key: _formKey,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildSectionHeader("EVIDENCE", Icons.photo_library_outlined, "STEP 1"),
-                const SizedBox(height: 12),
-                _buildImagePicker(),
-                _buildAIAnalysisCard(),
-                const SizedBox(height: 28),
-                _buildSectionHeader("CATEGORY SELECTION", Icons.auto_awesome_outlined, "STEP 2"),
-                const SizedBox(height: 12),
-                _buildCategoryGrid(),
-                const SizedBox(height: 28),
-                _buildSectionHeader("DESCRIPTION", Icons.edit_note, "STEP 3"),
-                const SizedBox(height: 12),
-                _buildDescriptionField(),
-                const SizedBox(height: 28),
-                _buildSectionHeader("LOCATION", Icons.map_outlined, "STEP 4"),
-                const SizedBox(height: 12),
-                _buildLocationPreview(),
-                const SizedBox(height: 36),
-                _buildSubmitButton(),
-              ],
+          child: Column(
+            children: [
+              _buildStepTracker(),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildSectionHeader(tr('report_step_evidence'), Icons.photo_library_outlined, "1"),
+                      const SizedBox(height: 12),
+                      _buildImagePicker(),
+                      _buildAIAnalysisCard(),
+                      const SizedBox(height: 28),
+                      _buildSectionHeader(tr('report_step_category'), Icons.auto_awesome_outlined, "2"),
+                      const SizedBox(height: 12),
+                      _buildCategoryGrid(),
+                      const SizedBox(height: 28),
+                      _buildSectionHeader(tr('report_step_description'), Icons.edit_note, "3"),
+                      const SizedBox(height: 12),
+                      _buildDescriptionField(),
+                      const SizedBox(height: 28),
+                      _buildSectionHeader(tr('report_step_location'), Icons.map_outlined, "4"),
+                      const SizedBox(height: 12),
+                      _buildLocationPreview(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Sticky footer — the primary action stays reachable without
+        // scrolling all the way through a 4-step form.
+        bottomNavigationBar: SafeArea(
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: PixelTheme.pixelShadow,
             ),
+            child: _buildSubmitButton(),
           ),
         ),
       ),
@@ -625,73 +708,70 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildSectionHeader(String title, IconData icon, String stepNumber) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
-    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
-    final borderColor = isDark ? Colors.white24 : const Color(0xFFE7E5E4);
-
     return Row(
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: borderColor),
+          width: 24,
+          height: 24,
+          alignment: Alignment.center,
+          decoration: const BoxDecoration(
+            color: PixelTheme.accentOrange,
+            shape: BoxShape.circle,
           ),
           child: Text(
             stepNumber,
-            style: TextStyle(
-              color: primaryColor,
-              fontWeight: FontWeight.bold,
-              fontSize: 10,
-              letterSpacing: 0.5,
-            ),
+            style: PixelTheme.pixelCaption(fontSize: 11, color: Colors.white),
           ),
         ),
         const SizedBox(width: 10),
-        Icon(icon, size: 16, color: secondaryColor),
+        Icon(icon, size: 17, color: PixelTheme.textSecondary),
         const SizedBox(width: 6),
         Text(
           title,
-          style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: secondaryColor,
-              fontSize: 11,
-              letterSpacing: 1.1),
+          style: PixelTheme.pixelHeading(fontSize: 15, color: PixelTheme.textPrimary),
         ),
       ],
     );
   }
 
   Widget _buildImagePicker() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
-    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
-
     return GestureDetector(
       onTap: _showImageSourceDialog,
       child: GlassCard(
         padding: EdgeInsets.zero,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(22),
         child: Container(
-          height: 180,
+          height: 140,
           alignment: Alignment.center,
-          child: _image == null
-              ? Column(
+          child: (_imageBytes == null && _pickedFile == null)
+              ? Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.add_a_photo_outlined, size: 40, color: primaryColor),
-                    const SizedBox(height: 10),
-                    Text("Tap to add evidence photo",
-                        style: TextStyle(color: primaryColor, fontSize: 13, fontWeight: FontWeight.w500)),
-                    const SizedBox(height: 4),
-                    Text("Supports camera & gallery",
-                        style: TextStyle(color: secondaryColor, fontSize: 11)),
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: PixelTheme.accentOrange.withOpacity(0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.add_a_photo_outlined, size: 22, color: PixelTheme.accentOrange),
+                    ),
+                    const SizedBox(width: 16),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(tr('report_tap_to_add_photo'),
+                            style: PixelTheme.pixelBody(color: PixelTheme.textPrimary, fontSize: 15, fontWeight: FontWeight.w500)),
+                        const SizedBox(height: 2),
+                        Text(tr('report_supports_camera_gallery'),
+                            style: PixelTheme.pixelBody(color: PixelTheme.textSecondary, fontSize: 13)),
+                      ],
+                    ),
                   ],
                 )
               : ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(22),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
@@ -700,14 +780,14 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                               '${ApiService.baseUrl}${_gradcamUrl!.startsWith('/') ? _gradcamUrl! : '/$_gradcamUrl'}',
                               fit: BoxFit.cover,
                             )
-                          : (kIsWeb
+                          : (_imageBytes != null
                               ? Image.memory(_imageBytes!, fit: BoxFit.cover)
-                              : Image.file(_image!, fit: BoxFit.cover)),
+                              : const SizedBox.shrink()),
                       if (_isAnalyzing)
                         Container(
                           color: Colors.black45,
                           child: const Center(
-                            child: CircularProgressIndicator(color: Colors.white),
+                            child: CircularProgressIndicator(color: PixelTheme.accentOrange),
                           ),
                         ),
                     ],
@@ -719,249 +799,198 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildAIAnalysisCard() {
-    if (_image == null) return const SizedBox.shrink();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (_imageBytes == null && _pickedFile == null) return const SizedBox.shrink();
     final isNormal = _selectedCategories.contains('Normal');
-    final activeColor = isNormal
-        ? (isDark ? const Color(0xFF34D399) : const Color(0xFF059669))
-        : (isDark ? Colors.white : const Color(0xFF0D9488));
-
-    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
-    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
-    final dividerColor = isDark ? Colors.white12 : Colors.black12;
+    final activeColor = isNormal ? PixelTheme.accentGreen : PixelTheme.accentOrange;
 
     return GlassCard(
       margin: const EdgeInsets.only(top: 20),
-      borderColor: activeColor.withOpacity(0.35),
+      borderRadius: BorderRadius.circular(22),
       color: activeColor.withOpacity(0.06),
-      child: Container(
-        decoration: BoxDecoration(
-          boxShadow: [
-            BoxShadow(
-              color: activeColor.withOpacity(0.04),
-              blurRadius: 20,
-              spreadRadius: 2,
-            )
-          ],
-        ),
-        child: _isAnalyzing
-            ? Row(
-                children: [
-                  SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      color: activeColor,
-                    ),
+      child: _isAnalyzing
+          ? Row(
+              children: [
+                SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: activeColor,
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "AI COMPUTER VISION SCANNING",
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 10,
-                              color: primaryColor,
-                              letterSpacing: 1.0),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          "Analyzing image features & infrastructure hazards...",
-                          style: TextStyle(
-                              color: secondaryColor,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w400),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                          isNormal
-                              ? Icons.verified_rounded
-                              : Icons.auto_awesome_rounded,
-                          color: activeColor,
-                          size: 20),
-                      const SizedBox(width: 8),
                       Text(
-                        "AI COMPUTER VISION SCAN",
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 11,
-                            color: primaryColor,
-                            letterSpacing: 1.0),
+                        tr('report_ai_scanning'),
+                        style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.textPrimary),
                       ),
-                      const Spacer(),
-                      if (_confidence != null)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: isDark ? Colors.black : Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                                color: isDark ? Colors.white24 : const Color(0xFFE7E5E4),
-                                width: 1.5),
-                          ),
-                          child: Text(
-                            "$_confidence MATCH",
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 10,
-                                color: primaryColor,
-                                letterSpacing: 0.8),
-                          ),
-                        ),
+                      const SizedBox(height: 4),
+                      Text(
+                        tr('report_ai_scanning_body'),
+                        style: PixelTheme.pixelBody(color: PixelTheme.textSecondary, fontSize: 13),
+                      ),
                     ],
                   ),
-                  Divider(height: 24, color: dividerColor),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        "Detected Issue:  ",
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: secondaryColor),
+                ),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                        isNormal
+                            ? Icons.verified_rounded
+                            : Icons.auto_awesome_rounded,
+                        color: activeColor,
+                        size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        tr('report_ai_vision_scan'),
+                        style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.textPrimary),
                       ),
+                    ),
+                    if (_confidence != null)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: activeColor.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: activeColor.withOpacity(0.25), width: 1.0),
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: PixelTheme.pixelShadow,
                         ),
                         child: Text(
-                          (_aiRawResult ?? 'None').toUpperCase(),
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold,
-                              color: activeColor,
-                              letterSpacing: 0.5),
+                          '$_confidence ${tr('common_match')}',
+                          style: PixelTheme.pixelCaption(fontSize: 11, color: PixelTheme.textPrimary),
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        "Auto-selected Category:  ",
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: secondaryColor),
+                  ],
+                ),
+                const Divider(height: 24, color: PixelTheme.bgBorder),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      tr('report_detected_issue'),
+                      style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textSecondary),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: activeColor.withOpacity(0.14),
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                      Text(
-                        _selectedCategories.isEmpty ? 'Manual Selection' : _selectedCategories.join(', '),
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: primaryColor),
+                      child: Text(
+                        (_aiRawResult ?? tr('common_none')),
+                        style: PixelTheme.pixelBody(fontSize: 14, fontWeight: FontWeight.bold, color: activeColor),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Icon(Icons.check_circle_outline_rounded, size: 14, color: activeColor),
-                      const SizedBox(width: 6),
-                      Text(
-                        "Categories pre-selected based on AI confidence.",
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: activeColor.withOpacity(0.85),
-                            fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      tr('report_auto_selected_category'),
+                      style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textSecondary),
+                    ),
+                    Expanded(
+                      child: Text(
+                        _selectedCategories.isEmpty
+                            ? tr('report_manual_selection')
+                            : _selectedCategories.map(trCategory).join(', '),
+                        style: PixelTheme.pixelBody(fontSize: 15, fontWeight: FontWeight.bold, color: PixelTheme.textPrimary),
                       ),
-                    ],
-                  ),
-                ],
-              ),
-      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Icon(Icons.check_circle_outline_rounded, size: 14, color: activeColor),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        tr('report_ai_preselected_note'),
+                        style: PixelTheme.pixelBody(fontSize: 13, color: activeColor, fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
     );
   }
 
   Widget _buildCategoryGrid() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
-    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
-    final borderUnselectedColor = isDark ? Colors.white24 : const Color(0xFFE7E5E4);
-    final surfaceUnselectedColor = isDark ? const Color(0xFF0F0F0F) : Colors.white;
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // Calculate exact width for two columns including spacing (12) and card decorations (31)
-        final cardSizedBoxWidth = (constraints.maxWidth - 12) / 2 - 31;
-
-        return Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: _categories.map((cat) {
-            final isSelected = _selectedCategories.contains(cat['name'] as String);
-            final iconColor  = cat['iconColor'] as Color;
-            return GestureDetector(
-              onTap: () {
-                setState(() {
-                  final name = cat['name'] as String;
-                  if (_selectedCategories.contains(name)) {
-                    _selectedCategories.remove(name);
-                  } else {
-                    _selectedCategories.add(name);
-                  }
-                });
-              },
-              child: GlassCard(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                borderRadius: BorderRadius.circular(14),
-                borderColor: isSelected ? iconColor : borderUnselectedColor,
-                color: isSelected ? iconColor.withOpacity(isDark ? 0.1 : 0.15) : surfaceUnselectedColor,
-                child: SizedBox(
-                  width: cardSizedBoxWidth,
-                  child: Row(
-                    children: [
-                      Icon(cat['icon'] as IconData, color: iconColor, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          cat['name'] as String,
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: isSelected ? primaryColor : secondaryColor,
-                              fontWeight: isSelected
-                                  ? FontWeight.bold
-                                  : FontWeight.w500),
-                        ),
-                      ),
-                      if (isSelected)
-                        Icon(Icons.check_circle_rounded, color: iconColor, size: 14),
-                    ],
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        mainAxisExtent: 58,
+      ),
+      itemCount: _categories.length,
+      itemBuilder: (context, index) {
+        final cat = _categories[index];
+        final isSelected = _selectedCategories.contains(cat['name'] as String);
+        final iconColor = cat['iconColor'] as Color;
+        return GestureDetector(
+          onTap: () {
+            setState(() {
+              final name = cat['name'] as String;
+              if (_selectedCategories.contains(name)) {
+                _selectedCategories.remove(name);
+              } else {
+                _selectedCategories.add(name);
+              }
+            });
+          },
+          child: PixelCard(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            borderRadius: 18,
+            borderWidth: 2.0,
+            borderColor: isSelected ? iconColor : null,
+            // Selection is carried by the border color and the checkmark,
+            // never by a translucent colour wash, so the label stays
+            // legible no matter what.
+            color: PixelTheme.bgSurface,
+            child: Row(
+              children: [
+                Icon(cat['icon'] as IconData, color: iconColor, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    trCategory(cat['name'] as String),
+                    style: PixelTheme.pixelBody(
+                      fontSize: 14,
+                      color: PixelTheme.textPrimary,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-              ),
-            );
-          }).toList(),
+                if (isSelected)
+                  Icon(Icons.check_circle_rounded, color: iconColor, size: 18)
+                else
+                  const Icon(Icons.circle_outlined, color: PixelTheme.textMuted, size: 16),
+              ],
+            ),
+          ),
         );
       },
     );
   }
 
   Widget _buildDescriptionField() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
-    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
-    final borderColor = isDark ? Colors.white24 : const Color(0xFFE7E5E4);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -969,31 +998,22 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              "DESCRIPTION",
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: secondaryColor,
-                letterSpacing: 0.8,
-              ),
+              tr('report_step_description'),
+              style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.textSecondary),
             ),
-            if (_image != null && !_isAnalyzing && _aiRawResult != null)
+            if ((_imageBytes != null || _pickedFile != null) && !_isAnalyzing && _aiRawResult != null)
               TextButton.icon(
                 onPressed: _enhanceDescription,
-                icon: Icon(Icons.auto_awesome, size: 14, color: isDark ? Colors.white : const Color(0xFF0D9488)),
+                icon: const Icon(Icons.auto_awesome, size: 14, color: PixelTheme.accentOrange),
                 label: Text(
-                  "AI Enhance",
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : const Color(0xFF0D9488),
-                  ),
+                  tr('report_ai_enhance'),
+                  style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.accentOrange, fontWeight: FontWeight.bold),
                 ),
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  backgroundColor: isDark ? Colors.white.withOpacity(0.12) : const Color(0xFF0D9488).withOpacity(0.12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  backgroundColor: PixelTheme.accentOrange.withOpacity(0.12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                 ),
               ),
           ],
@@ -1003,29 +1023,29 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           controller: _descriptionController,
           maxLines: 4,
           maxLength: 500,
-          style: TextStyle(fontSize: 14, color: primaryColor),
+          style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary),
           decoration: InputDecoration(
-            hintText: "Describe the issue in detail (e.g. size, exact spot, hazard level)…",
-            hintStyle: TextStyle(color: secondaryColor.withOpacity(0.7)),
+            hintText: tr('report_description_hint'),
+            hintStyle: PixelTheme.pixelBody(color: PixelTheme.textMuted, fontSize: 15),
             filled: true,
-            fillColor: isDark ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.03),
+            fillColor: PixelTheme.bgInput,
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide(color: borderColor, width: 1.0),
+              borderRadius: BorderRadius.circular(18),
+              borderSide: BorderSide.none,
             ),
             enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide(color: borderColor, width: 1.0),
+              borderRadius: BorderRadius.circular(18),
+              borderSide: BorderSide.none,
             ),
             focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide(color: isDark ? Colors.white : const Color(0xFF0D9488), width: 1.5),
+              borderRadius: BorderRadius.circular(18),
+              borderSide: const BorderSide(color: PixelTheme.accentOrange, width: 1.5),
             ),
-            counterStyle: TextStyle(fontSize: 11, color: secondaryColor),
+            counterStyle: PixelTheme.pixelBody(fontSize: 12, color: PixelTheme.textSecondary),
           ),
           validator: (value) {
             if (value == null || value.trim().isEmpty) {
-              return 'Please add a brief description of the issue.';
+              return tr('report_description_error');
             }
             return null;
           },
@@ -1035,22 +1055,19 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildLocationPreview() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryColor = isDark ? Colors.white : const Color(0xFF1C1917);
-    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
-
     return GlassCard(
       padding: const EdgeInsets.all(16),
+      borderRadius: BorderRadius.circular(22),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: isDark ? Colors.white.withOpacity(0.12) : const Color(0xFF0D9488).withOpacity(0.1),
+              color: PixelTheme.accentOrange.withOpacity(0.12),
               shape: BoxShape.circle,
             ),
-            child: Icon(Icons.location_on, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 20),
+            child: const Icon(Icons.location_on, color: PixelTheme.accentOrange, size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1058,15 +1075,14 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _address ?? 'Fetching address…',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: primaryColor),
+                  _addressLine,
+                  style: PixelTheme.pixelBody(fontWeight: FontWeight.bold, fontSize: 15, color: PixelTheme.textPrimary),
                 ),
                 const SizedBox(height: 4),
                 if (_locationDisplay.isNotEmpty &&
                     _locationDisplay != 'Fetching location…')
-                  Text(_locationDisplay,
-                      style: TextStyle(
-                          fontSize: 12, color: secondaryColor)),
+                  Text(_locationLine,
+                      style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary)),
               ],
             ),
           ),
@@ -1076,31 +1092,12 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildSubmitButton() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return SizedBox(
+    return PixelButton(
+      text: tr('report_submit_button'),
+      color: PixelTheme.accentOrange,
       height: 54,
-      width: double.infinity,
-      child: ElevatedButton(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
-          foregroundColor: isDark ? Colors.black : Colors.white,
-          disabledBackgroundColor: isDark ? Colors.white38 : const Color(0xFF0D9488).withOpacity(0.5),
-          disabledForegroundColor: isDark ? Colors.black54 : Colors.white70,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        ),
-        onPressed: _isAnalyzing || _isSubmitting ? null : _submitReport,
-        child: _isSubmitting
-            ? SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                    color: isDark ? Colors.black : Colors.white, strokeWidth: 2.5))
-            : const Text("SUBMIT REPORT",
-                style: TextStyle(
-                    fontSize: 15,
-                    letterSpacing: 0.8,
-                    fontWeight: FontWeight.bold)),
-      ),
+      isLoading: _isSubmitting,
+      onPressed: (_isAnalyzing || _isSubmitting) ? null : _submitReport,
     );
   }
 }

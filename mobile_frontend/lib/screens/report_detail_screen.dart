@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -11,6 +10,9 @@ import 'history_screen.dart'; // For FullScreenImageViewer reference
 import 'package:http/http.dart' as http;
 import '../widgets/glass_card.dart';
 import '../widgets/background_decorator.dart';
+import '../pixel_theme.dart';
+import '../widgets/pixel_widgets.dart';
+import '../localization/app_strings.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
@@ -31,7 +33,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
   bool _isLoadingAction = false;
   
   // Worker fields
-  File? _proofImage;
+  XFile? _proofImageFile;
   Uint8List? _proofImageBytes;
   String? _proofImageName;
   final ImagePicker _picker = ImagePicker();
@@ -95,17 +97,17 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           final geometry = route['geometry'];
           final coordinates = geometry['coordinates'] as List;
           
-          final List<LatLng> points = coordinates.map((c) => LatLng(c[1] as double, c[0] as double)).toList();
+          final List<LatLng> points = coordinates.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())).toList();
           
-          final distanceMeters = route['distance'] as double;
-          final durationSeconds = route['duration'] as double;
+          final distanceMeters = (route['distance'] as num).toDouble();
+          final durationSeconds = (route['duration'] as num).toDouble();
           
           setState(() {
             _routePoints = points;
             _routeDistance = distanceMeters >= 1000
                 ? '${(distanceMeters / 1000).toStringAsFixed(1)} km'
                 : '${distanceMeters.toStringAsFixed(0)} m';
-            _routeDuration = '${(durationSeconds / 60).toStringAsFixed(0)} mins';
+            _routeDuration = '${(durationSeconds / 60).toStringAsFixed(0)} ${tr('detail_mins_suffix')}';
           });
         }
       }
@@ -162,14 +164,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     try {
       final res = await ApiService.startMaintenance(_report['id']);
       if (res.statusCode == 200) {
-        _showSnackBar('Maintenance started successfully!', Colors.green);
+        _showSnackBar(tr('detail_maintenance_started'), PixelTheme.accentGreen);
         await _refreshReport();
       } else {
-        final err = jsonDecode(res.body)['detail'] ?? 'Failed to update';
-        _showSnackBar('Error: $err', Colors.redAccent);
+        final err = jsonDecode(res.body)['detail'] ?? tr('detail_update_failed');
+        _showSnackBar('${tr('report_error_prefix')}$err', PixelTheme.alertRed);
       }
     } catch (e) {
-      _showSnackBar('Connection failed. Please check network.', Colors.redAccent);
+      _showSnackBar(tr('detail_connection_failed'), PixelTheme.alertRed);
     } finally {
       if (mounted) setState(() => _isLoadingAction = false);
     }
@@ -178,14 +180,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
   // Action: Worker submits completion proof
   Future<void> _handleCompleteTask() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_proofImage == null) {
-      _showSnackBar('Please select or capture a completion proof photo.', Colors.redAccent);
+    if (_proofImageBytes == null && _proofImageFile == null) {
+      _showSnackBar(tr('detail_completion_proof_required'), PixelTheme.alertRed);
       return;
     }
 
     setState(() => _isLoadingAction = true);
     try {
-      final streamedResponse = kIsWeb
+      final streamedResponse = (_proofImageBytes != null)
           ? await ApiService.completeTaskBytes(
               _report['id'],
               _notesController.text.trim(),
@@ -195,24 +197,24 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           : await ApiService.completeTask(
               _report['id'],
               _notesController.text.trim(),
-              _proofImage!.path,
+              _proofImageFile!.path,
             );
       final response = await ResponseDecoder.decode(streamedResponse);
       if (response.statusCode == 200) {
-        _showSnackBar('Completion proof submitted successfully!', Colors.green);
+        _showSnackBar(tr('detail_completion_proof_submitted'), PixelTheme.accentGreen);
         _notesController.clear();
         setState(() {
-          _proofImage = null;
+          _proofImageFile = null;
           _proofImageBytes = null;
           _proofImageName = null;
         });
         await _refreshReport();
       } else {
-        final err = jsonDecode(response.body)['detail'] ?? 'Failed to submit proof';
-        _showSnackBar('Error: $err', Colors.redAccent);
+        final err = jsonDecode(response.body)['detail'] ?? tr('detail_submit_proof_failed');
+        _showSnackBar('${tr('report_error_prefix')}$err', PixelTheme.alertRed);
       }
     } catch (e) {
-      _showSnackBar('Connection failed. Please check network.', Colors.redAccent);
+      _showSnackBar(tr('detail_connection_failed'), PixelTheme.alertRed);
     } finally {
       if (mounted) setState(() => _isLoadingAction = false);
     }
@@ -226,7 +228,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     if (picked == null) return;
     final bytes = await picked.readAsBytes();
     setState(() {
-      _proofImage = File(picked.path);
+      _proofImageFile = picked;
       _proofImageBytes = bytes;
       _proofImageName = picked.name;
     });
@@ -245,12 +247,12 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
             ListTile(
               leading: Icon(
                 Icons.photo_library_rounded, 
-                color: isDark ? Colors.white : const Color(0xFF0D9488),
+                color: isDark ? Colors.white : const Color(0xFFE08A5B),
               ),
               title: Text(
-                'Choose from Gallery',
+                tr('report_choose_gallery'),
                 style: TextStyle(
-                  color: isDark ? Colors.white : const Color(0xFF1C1917),
+                  color: isDark ? Colors.white : const Color(0xFF2B2B28),
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -261,13 +263,13 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
             ),
             ListTile(
               leading: Icon(
-                Icons.camera_alt_rounded, 
-                color: isDark ? Colors.white : const Color(0xFF0D9488),
+                Icons.camera_alt_rounded,
+                color: isDark ? Colors.white : const Color(0xFFE08A5B),
               ),
               title: Text(
-                'Take a Photo',
+                tr('report_take_photo'),
                 style: TextStyle(
-                  color: isDark ? Colors.white : const Color(0xFF1C1917),
+                  color: isDark ? Colors.white : const Color(0xFF2B2B28),
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -286,57 +288,18 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(msg),
+        content: Text(msg, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
         backgroundColor: bg,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
     );
   }
 
-  _StatusConfig _getStatusConfig(String status) {
-    switch (status) {
-      case ReportStatus.resolved:
-        return const _StatusConfig(
-            color: Color(0xFF059669),
-            bg: Color(0xFFECFDF5),
-            icon: Icons.check_circle_rounded,
-            label: 'Resolved');
-      case ReportStatus.inMaintenance:
-        return const _StatusConfig(
-            color: Color(0xFF0EA5E9),
-            bg: Color(0xFFF0F9FF),
-            icon: Icons.construction_rounded,
-            label: 'In Maintenance');
-      case ReportStatus.inProcess:
-        return const _StatusConfig(
-            color: Color(0xFFD97706),
-            bg: Color(0xFFFFFBEB),
-            icon: Icons.autorenew_rounded,
-            label: 'In Process');
-      case ReportStatus.inReview:
-        return const _StatusConfig(
-            color: Color(0xFF2563EB),
-            bg: Color(0xFFEFF6FF),
-            icon: Icons.rate_review_rounded,
-            label: 'In Review');
-      case ReportStatus.rejected:
-        return const _StatusConfig(
-            color: Color(0xFFEF4444),
-            bg: Color(0xFFFEF2F2),
-            icon: Icons.cancel_rounded,
-            label: 'Rejected');
-      default:
-        return const _StatusConfig(
-            color: Color(0xFFDC2626),
-            bg: Color(0xFFFEF2F2),
-            icon: Icons.hourglass_empty_rounded,
-            label: 'Pending');
-    }
-  }
 
   String _formatTime(String? ts) {
-    if (ts == null || ts.isEmpty) return 'Unknown';
+    if (ts == null || ts.isEmpty) return tr('common_unknown');
     try {
       final dt = DateTime.parse(ts).toLocal();
       return '${dt.day}/${dt.month}/${dt.year} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
@@ -349,19 +312,19 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final status = _report['status'] ?? ReportStatus.pending;
-    final cfg = _getStatusConfig(status);
+    final cfg = getStatusConfig(status);
     final userRole = UserSession.instance.role;
     final isWorker = userRole.toLowerCase().contains('worker');
     final isWorkerCompleted = _report['worker_completed'] == 1;
 
-    final appBarColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    const appBarColor = PixelTheme.primaryGreen;
 
     return BackgroundDecorator(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
           title: Text(
-            'Report Details',
+            tr('detail_title'),
             style: TextStyle(
               color: appBarColor,
               fontWeight: FontWeight.bold,
@@ -375,7 +338,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
             IconButton(
               icon: Icon(Icons.refresh_rounded, color: appBarColor),
               onPressed: _refreshReport,
-              tooltip: 'Refresh',
+              tooltip: tr('common_refresh'),
             ),
           ],
         ),
@@ -397,11 +360,11 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                       children: [
                         Expanded(
                           child: Text(
-                            _report['categories'] ?? 'Uncategorized',
+                            _report['categories'] != null ? trCategory(_report['categories'].toString()) : tr('detail_uncategorized'),
                             style: TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.bold,
-                              color: isDark ? Colors.white : const Color(0xFF1C1917),
+                              color: isDark ? Colors.white : const Color(0xFF2B2B28),
                               letterSpacing: -0.5,
                             ),
                           ),
@@ -419,7 +382,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                               Icon(cfg.icon, color: cfg.color, size: 14),
                               const SizedBox(width: 5),
                               Text(
-                                cfg.label,
+                                trStatus(status),
                                 style: TextStyle(
                                   color: cfg.color,
                                   fontSize: 12,
@@ -441,14 +404,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                           children: [
                             Icon(
                               Icons.access_time_rounded, 
-                              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), 
+                              color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85), 
                               size: 14,
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              'Reported at: ${_formatTime(_report['timestamp'])}',
+                              '${tr('detail_reported_at_prefix')}${_formatTime(_report['timestamp'])}',
                               style: TextStyle(
-                                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), 
+                                color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85), 
                                 fontSize: 13, 
                                 fontWeight: FontWeight.w400,
                               ),
@@ -468,18 +431,18 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                     const SizedBox(height: 20),
 
                     // Location Card
-                    _buildSectionHeader('Location Details', Icons.location_on_rounded),
+                    _buildSectionHeader(tr('detail_location_details'), Icons.location_on_rounded),
                     _buildLocationCard(),
 
                     const SizedBox(height: 20),
 
                     // Description Card
-                    _buildSectionHeader('Description', Icons.description_rounded),
+                    _buildSectionHeader(tr('report_step_description'), Icons.description_rounded),
                     _buildDescriptionCard(),
 
                     // Timeline / History Step progress
                     const SizedBox(height: 20),
-                    _buildSectionHeader('Workflow Timeline', Icons.route_rounded),
+                    _buildSectionHeader(tr('detail_workflow_timeline'), Icons.route_rounded),
                     _buildTimelineCard(),
 
                     // Communication Thread (if authority notes present)
@@ -487,14 +450,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                         _report['authority_notes'] != null &&
                         (_report['authority_notes'] as String).trim().isNotEmpty) ...[
                       const SizedBox(height: 20),
-                      _buildSectionHeader('Communication Thread', Icons.forum_rounded),
+                      _buildSectionHeader(tr('detail_communication_thread'), Icons.forum_rounded),
                       _buildAuthorityNotesCard(),
                     ],
 
                     // Worker Completion Proof (if completed already)
                     if (isWorkerCompleted) ...[
                       const SizedBox(height: 20),
-                      _buildSectionHeader('Completion Proof', Icons.task_alt_rounded),
+                      _buildSectionHeader(tr('detail_completion_proof'), Icons.task_alt_rounded),
                       _buildCompletionProofCard(),
                     ],
 
@@ -524,13 +487,13 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
         : (int.tryParse(_report['upvotes']?.toString() ?? '0') ?? 0);
     final isResolved = _report['status'] == 'Resolved';
 
-    final Color baseColor = isDark ? Colors.white : const Color(0xFF1C1917);
-    final Color inactiveColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+    final Color baseColor = isDark ? Colors.white : const Color(0xFF2B2B28);
+    final Color inactiveColor = isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85);
 
     final Color glowColor = upvotes >= 5
-        ? const Color(0xFFF59E0B)
+        ? const Color(0xFFB45309)
         : upvotes >= 2
-            ? const Color(0xFFEC4899)
+            ? const Color(0xFF6B7B8C)
             : baseColor;
 
     return AnimatedSwitcher(
@@ -546,7 +509,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                         final res = await ApiService.upvoteReport(_report['id']);
                         if (res.statusCode == 200) {
                           final data = jsonDecode(res.body);
-                          _showSnackBar('Upvote recorded! Thanks for supporting this report.', Colors.green);
+                          _showSnackBar(tr('detail_upvote_recorded'), PixelTheme.accentGreen);
                           setState(() {
                             final newCount = data['upvotes'] ?? (upvotes + 1);
                             _report['upvotes'] = newCount;
@@ -562,10 +525,10 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                             }
                           });
                         } else {
-                          _showSnackBar('Failed to upvote report.', Colors.redAccent);
+                          _showSnackBar(tr('detail_upvote_failed'), PixelTheme.alertRed);
                         }
                       } catch (e) {
-                        _showSnackBar('Connection error: $e', Colors.redAccent);
+                        _showSnackBar('${tr('detail_connection_error_prefix')}$e', PixelTheme.alertRed);
                       } finally {
                         if (mounted) setState(() => _isLoadingAction = false);
                       }
@@ -576,7 +539,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                 color: upvotes > 0 ? glowColor : inactiveColor,
               ),
               label: Text(
-                upvotes > 0 ? '$upvotes Upvotes' : 'Upvote',
+                upvotes > 0 ? trCount('detail_upvotes_count', upvotes) : tr('detail_upvote'),
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
@@ -612,7 +575,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
       width: double.infinity,
       height: 240,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF5F5F4),
+        color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1EDE4),
         borderRadius: const BorderRadius.vertical(bottom: Radius.circular(30)),
         boxShadow: [
           BoxShadow(
@@ -684,14 +647,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.zoom_in_rounded, color: Colors.white, size: 14),
-                          SizedBox(width: 4),
+                          const Icon(Icons.zoom_in_rounded, color: Colors.white, size: 14),
+                          const SizedBox(width: 4),
                           Text(
-                            'Tap to View Photo',
-                            style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                            tr('detail_tap_to_view_photo'),
+                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
                           ),
                         ],
                       ),
@@ -713,14 +676,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                           ),
                         ],
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.auto_awesome, color: Color(0xFF1C1917), size: 10),
-                          SizedBox(width: 4),
+                          const Icon(Icons.auto_awesome, color: Color(0xFF2B2B28), size: 10),
+                          const SizedBox(width: 4),
                           Text(
-                            'AI Scanned',
-                            style: TextStyle(color: Color(0xFF1C1917), fontSize: 10, fontWeight: FontWeight.bold),
+                            tr('detail_ai_scanned'),
+                            style: const TextStyle(color: Color(0xFF2B2B28), fontSize: 10, fontWeight: FontWeight.bold),
                           ),
                         ],
                       ),
@@ -736,7 +699,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
 
   Widget _buildFallbackImageHeader(bool isDark) {
     return Container(
-      color: isDark ? const Color(0xFF161616) : const Color(0xFFF5F5F4),
+      color: isDark ? const Color(0xFF161616) : const Color(0xFFF1EDE4),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -753,15 +716,15 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
               ),
               child: Icon(
                 Icons.image_not_supported_outlined, 
-                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), 
+                color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85), 
                 size: 36,
               ),
             ),
             const SizedBox(height: 12),
             Text(
-              'No visual media attached',
+              tr('detail_no_media'),
               style: TextStyle(
-                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), 
+                color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85), 
                 fontSize: 13, 
                 fontWeight: FontWeight.w500,
               ),
@@ -774,7 +737,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
 
   Widget _buildSectionHeader(String title, IconData icon) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1917);
+    final primaryTextColor = isDark ? Colors.white : const Color(0xFF2B2B28);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10, left: 2, top: 10),
@@ -797,51 +760,44 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
   }
 
   Widget _buildAIBanner() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final double confidence = double.tryParse((_report['confidence'] ?? '0').replaceAll('%', '')) ?? 0.0;
-    
-    return GlassCard(
-      borderColor: isDark ? Colors.white.withOpacity(0.2) : const Color(0xFF0D9488).withOpacity(0.3),
-      color: isDark ? Colors.white.withOpacity(0.08) : const Color(0xFF0D9488).withOpacity(0.06),
+    final String pred = _report['ai_prediction'] != null ? _report['ai_prediction'].toString() : tr('category_Normal');
+    final bool isHighMatch = confidence >= 80;
+    final Color matchColor = isHighMatch ? const Color(0xFF3F8F5E) : PixelTheme.accentOrange;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: PixelTheme.bgSurface,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: PixelTheme.pixelShadow,
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: isDark ? Colors.white10 : const Color(0xFF0D9488).withOpacity(0.1),
+              color: matchColor.withOpacity(0.15),
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              Icons.auto_awesome, 
-              color: isDark ? Colors.white : const Color(0xFF0D9488), 
-              size: 20,
-            ),
+            child: Icon(Icons.auto_awesome, color: matchColor, size: 20),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'AI ASSISTED DIAGNOSTICS',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white70 : const Color(0xFF0D9488),
-                    letterSpacing: 0.5,
-                  ),
+                  tr('detail_ai_assisted_diagnostics'),
+                  style: PixelTheme.pixelCaption(fontSize: 11, color: matchColor),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 4),
                 Text(
-                  _report['ai_prediction'] ?? 'Unknown',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : const Color(0xFF1C1917),
-                  ),
+                  pred,
+                  style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary, fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 Row(
                   children: [
                     Expanded(
@@ -849,20 +805,16 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                         borderRadius: BorderRadius.circular(4),
                         child: LinearProgressIndicator(
                           value: confidence / 100.0,
-                          backgroundColor: isDark ? Colors.white.withOpacity(0.08) : const Color(0xFF0D9488).withOpacity(0.1),
-                          color: isDark ? Colors.white : const Color(0xFF0D9488),
+                          backgroundColor: matchColor.withOpacity(0.15),
+                          color: matchColor,
                           minHeight: 6,
                         ),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Text(
-                      '${confidence.toInt()}% Match',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : const Color(0xFF0D9488),
-                      ),
+                      "${confidence.toInt()}% ${tr('detail_match_suffix')}",
+                      style: PixelTheme.pixelCaption(fontSize: 9, color: matchColor),
                     ),
                   ],
                 ),
@@ -876,7 +828,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
 
   Widget _buildLocationCard() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final secondaryColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+    final secondaryColor = isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85);
     
     // Check if worker
     final userRole = UserSession.instance.role;
@@ -902,21 +854,21 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Task Location',
+                        tr('detail_task_location'),
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
-                          color: isDark ? Colors.tealAccent : const Color(0xFF0D9488),
+                          color: isDark ? Colors.tealAccent : const Color(0xFFE08A5B),
                           letterSpacing: 0.5,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        _report['address'] ?? _report['location'] ?? 'Location unknown',
+                        _report['address'] ?? _report['location'] ?? tr('common_location_unknown'),
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w500,
-                          color: isDark ? Colors.white : const Color(0xFF1C1917),
+                          color: isDark ? Colors.white : const Color(0xFF2B2B28),
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -927,7 +879,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                 ElevatedButton.icon(
                   onPressed: () => _launchGoogleMaps(lat, lng),
                   icon: const Icon(Icons.directions_rounded, size: 16),
-                  label: const Text('Directions', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  label: Text(tr('detail_directions'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF4285F4), // Google blue
                     foregroundColor: Colors.white,
@@ -1042,12 +994,12 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: isDark ? Colors.white.withOpacity(0.1) : const Color(0xFF0D9488).withOpacity(0.1),
+                  color: isDark ? Colors.white.withOpacity(0.1) : const Color(0xFFE08A5B).withOpacity(0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(
                   Icons.location_on_rounded, 
-                  color: isDark ? Colors.white : const Color(0xFF0D9488), 
+                  color: isDark ? Colors.white : const Color(0xFFE08A5B), 
                   size: 20,
                 ),
               ),
@@ -1057,18 +1009,18 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _report['address'] ?? _report['location'] ?? 'Location unknown',
+                      _report['address'] ?? _report['location'] ?? tr('common_location_unknown'),
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
-                        color: isDark ? Colors.white : const Color(0xFF1C1917),
+                        color: isDark ? Colors.white : const Color(0xFF2B2B28),
                         height: 1.4,
                       ),
                     ),
                     if (lat != null && lng != null) ...[
                       const SizedBox(height: 6),
                       Text(
-                        'GPS: ${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
+                        '${tr('detail_gps_label')}: ${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w500,
@@ -1088,7 +1040,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
 
   Widget _buildDescriptionCard() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final secondaryTextColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+    final secondaryTextColor = isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85);
     
     return GlassCard(
       child: Row(
@@ -1097,7 +1049,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: isDark ? Colors.white.withOpacity(0.05) : const Color(0xFF78716C).withOpacity(0.1),
+              color: isDark ? Colors.white.withOpacity(0.05) : const Color(0xFF8A8A85).withOpacity(0.1),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(Icons.notes_rounded, color: secondaryTextColor, size: 20),
@@ -1105,10 +1057,10 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           const SizedBox(width: 14),
           Expanded(
             child: Text(
-              _report['description'] ?? 'No description provided.',
+              _report['description'] ?? tr('detail_no_description'),
               style: TextStyle(
                 fontSize: 14, 
-                color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1C1917), 
+                color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF2B2B28), 
                 height: 1.5,
               ),
             ),
@@ -1128,14 +1080,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           children: [
             _buildTimelineStep(
               icon: Icons.add_alert_rounded,
-              label: 'Report Submitted',
+              label: tr('detail_timeline_submitted'),
               time: _formatTime(_report['timestamp']),
               done: true,
               isActive: false,
             ),
             _buildTimelineStep(
               icon: Icons.cancel_outlined,
-              label: 'Rejected by Admin',
+              label: tr('detail_timeline_rejected'),
               time: _formatTime(_report['reviewed_at'] ?? _report['updated_at']),
               done: true,
               isActive: true,
@@ -1169,7 +1121,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
         children: [
           _buildTimelineStep(
             icon: Icons.add_alert_rounded,
-            label: 'Report Submitted',
+            label: tr('detail_timeline_submitted'),
             time: _formatTime(_report['timestamp']),
             done: s1Done,
             isActive: s1Active,
@@ -1177,8 +1129,8 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           _buildTimelineStep(
             icon: Icons.rate_review_rounded,
             label: _report['reviewed_at'] != null
-                ? 'Approved & Forwarded to Dept'
-                : 'Awaiting Admin Review',
+                ? tr('detail_timeline_approved')
+                : tr('detail_timeline_awaiting_review'),
             time: _formatTime(_report['reviewed_at'] ?? _report['forwarded_at']),
             done: s2Done,
             isActive: s2Active,
@@ -1186,8 +1138,8 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           _buildTimelineStep(
             icon: Icons.engineering_rounded,
             label: _report['in_process_at'] != null
-                ? (UserSession.instance.role.toLowerCase() == 'citizen' ? 'Task Assigned to Worker' : 'Assigned to Worker: ${_report['assigned_worker']}')
-                : 'Awaiting Worker Assignment',
+                ? (UserSession.instance.role.toLowerCase() == 'citizen' ? tr('detail_timeline_assigned_citizen') : '${tr('detail_timeline_assigned_worker_prefix')}${_report['assigned_worker']}')
+                : tr('detail_timeline_awaiting_assignment'),
             time: _formatTime(_report['in_process_at']),
             done: s3Done,
             isActive: s3Active,
@@ -1195,10 +1147,10 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           _buildTimelineStep(
             icon: Icons.construction_rounded,
             label: _report['completion_submitted_at'] != null
-                ? 'Maintenance Completed'
+                ? tr('detail_timeline_maintenance_completed')
                 : (_report['in_maintenance_at'] != null
-                    ? 'Maintenance In Progress'
-                    : 'Awaiting Maintenance'),
+                    ? tr('detail_timeline_maintenance_in_progress')
+                    : tr('detail_timeline_awaiting_maintenance')),
             time: _formatTime(_report['completion_submitted_at'] ?? _report['in_maintenance_at']),
             done: s4Done,
             isActive: s4Active,
@@ -1206,8 +1158,8 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           _buildTimelineStep(
             icon: Icons.check_circle_rounded,
             label: _report['resolved_at'] != null
-                ? 'Resolved & Verified'
-                : 'Awaiting Verification',
+                ? tr('detail_timeline_resolved')
+                : tr('detail_timeline_awaiting_verification'),
             time: _formatTime(_report['resolved_at']),
             done: s5Done,
             isActive: s5Active,
@@ -1239,32 +1191,32 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           ? customColor.withOpacity(0.15) 
           : customColor.withOpacity(0.1);
       iconColor = customColor;
-      labelColor = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1C1917);
+      labelColor = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF2B2B28);
       if (isActive || done) {
         borderWidth = 1.5;
         borderColor = customColor;
       }
     } else if (done) {
       nodeColor = isDark 
-          ? const Color(0xFF059669).withOpacity(0.15) 
-          : const Color(0xFF059669).withOpacity(0.1);
-      iconColor = isDark ? const Color(0xFF34D399) : const Color(0xFF059669);
-      labelColor = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1C1917);
+          ? const Color(0xFF3F8F5E).withOpacity(0.15) 
+          : const Color(0xFF3F8F5E).withOpacity(0.1);
+      iconColor = isDark ? const Color(0xFF3F8F5E) : const Color(0xFF3F8F5E);
+      labelColor = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF2B2B28);
     } else if (isActive) {
-      final activeColor = isLast ? const Color(0xFF059669) : const Color(0xFF0D9488);
+      final activeColor = isLast ? const Color(0xFF3F8F5E) : const Color(0xFFE08A5B);
       nodeColor = isDark 
-          ? (isLast ? const Color(0xFF34D399).withOpacity(0.15) : Colors.white.withOpacity(0.15)) 
+          ? (isLast ? const Color(0xFF3F8F5E).withOpacity(0.15) : Colors.white.withOpacity(0.15)) 
           : activeColor.withOpacity(0.15);
-      iconColor = isDark ? (isLast ? const Color(0xFF34D399) : Colors.white) : activeColor;
-      labelColor = isDark ? Colors.white : const Color(0xFF1C1917);
+      iconColor = isDark ? (isLast ? const Color(0xFF3F8F5E) : Colors.white) : activeColor;
+      labelColor = isDark ? Colors.white : const Color(0xFF2B2B28);
       borderWidth = 1.5;
-      borderColor = isDark ? (isLast ? const Color(0xFF34D399) : Colors.white) : activeColor;
+      borderColor = isDark ? (isLast ? const Color(0xFF3F8F5E) : Colors.white) : activeColor;
     } else {
       nodeColor = isDark 
           ? Colors.white.withOpacity(0.04) 
           : Colors.black.withOpacity(0.04);
-      iconColor = isDark ? const Color(0xFF64748B) : const Color(0xFF78716C);
-      labelColor = isDark ? const Color(0xFF64748B) : const Color(0xFF78716C);
+      iconColor = isDark ? const Color(0xFF64748B) : const Color(0xFF8A8A85);
+      labelColor = isDark ? const Color(0xFF64748B) : const Color(0xFF8A8A85);
     }
 
     return Row(
@@ -1283,8 +1235,8 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                     ? [
                         BoxShadow(
                           color: isDark 
-                              ? (isLast ? const Color(0xFF34D399).withOpacity(0.15) : Colors.white.withOpacity(0.15)) 
-                              : (isLast ? const Color(0xFF059669).withOpacity(0.15) : const Color(0xFF0D9488).withOpacity(0.15)),
+                              ? (isLast ? const Color(0xFF3F8F5E).withOpacity(0.15) : Colors.white.withOpacity(0.15)) 
+                              : (isLast ? const Color(0xFF3F8F5E).withOpacity(0.15) : const Color(0xFFE08A5B).withOpacity(0.15)),
                           blurRadius: 6,
                           spreadRadius: 1,
                         )
@@ -1298,7 +1250,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                 width: 2,
                 height: 30,
                 color: done 
-                    ? const Color(0xFF059669).withOpacity(0.3) 
+                    ? const Color(0xFF3F8F5E).withOpacity(0.3) 
                     : (isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.08)),
               ),
           ],
@@ -1317,13 +1269,13 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                   color: labelColor,
                 ),
               ),
-              if (time != 'Unknown' && done) ...[
+              if (time != tr('common_unknown') && done) ...[
                 const SizedBox(height: 4),
                 Text(
                   time,
                   style: TextStyle(
                     fontSize: 11, 
-                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), 
+                    color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85), 
                     fontWeight: FontWeight.w400,
                   ),
                 ),
@@ -1333,17 +1285,17 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: isDark 
-                        ? (isLast ? const Color(0xFF34D399).withOpacity(0.15) : Colors.white.withOpacity(0.15)) 
-                        : (isLast ? const Color(0xFF059669).withOpacity(0.15) : const Color(0xFF0D9488).withOpacity(0.15)),
+                        ? (isLast ? const Color(0xFF3F8F5E).withOpacity(0.15) : Colors.white.withOpacity(0.15)) 
+                        : (isLast ? const Color(0xFF3F8F5E).withOpacity(0.15) : const Color(0xFFE08A5B).withOpacity(0.15)),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
-                    'Active Stage',
+                    tr('detail_active_stage'),
                     style: TextStyle(
                       fontSize: 9, 
                       color: isDark 
-                          ? (isLast ? const Color(0xFF34D399) : Colors.white) 
-                          : (isLast ? const Color(0xFF059669) : const Color(0xFF0D9488)), 
+                          ? (isLast ? const Color(0xFF3F8F5E) : Colors.white) 
+                          : (isLast ? const Color(0xFF3F8F5E) : const Color(0xFFE08A5B)), 
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -1369,7 +1321,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           final isAuth = line.startsWith('[Authority]');
           final isAdmin = line.startsWith('[Admin]');
           
-          String sender = 'System';
+          String sender = tr('detail_sender_system');
           String content = line;
           Color bubbleColor;
           Color textColor;
@@ -1378,14 +1330,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           BorderRadius radius;
 
           if (isAuth) {
-            sender = 'Authority Dept';
+            sender = tr('detail_sender_authority');
             content = line.replaceFirst('[Authority]', '').trim();
             bubbleColor = isDark 
-                ? const Color(0xFF059669).withOpacity(0.15) 
-                : const Color(0xFFECFDF5);
-            textColor = isDark ? const Color(0xFF34D399) : const Color(0xFF05593F);
+                ? const Color(0xFF3F8F5E).withOpacity(0.15) 
+                : const Color(0xFFF0FDF4);
+            textColor = isDark ? const Color(0xFF3F8F5E) : const Color(0xFF05593F);
             borderColor = isDark 
-                ? const Color(0xFF059669).withOpacity(0.3) 
+                ? const Color(0xFF3F8F5E).withOpacity(0.3) 
                 : const Color(0xFFA7F3D0);
             align = CrossAxisAlignment.end;
             radius = const BorderRadius.only(
@@ -1395,15 +1347,15 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
               bottomRight: Radius.circular(4),
             );
           } else if (isAdmin) {
-            sender = 'City Admin';
+            sender = tr('detail_sender_admin');
             content = line.replaceFirst('[Admin]', '').trim();
             bubbleColor = isDark 
-                ? const Color(0xFF2563EB).withOpacity(0.15) 
-                : const Color(0xFFEFF6FF);
-            textColor = isDark ? const Color(0xFF60A5FA) : const Color(0xFF1E40AF);
+                ? const Color(0xFF6B7B8C).withOpacity(0.15) 
+                : const Color(0xFFF1F5F9);
+            textColor = isDark ? const Color(0xFF6B7B8C) : const Color(0xFF334155);
             borderColor = isDark 
-                ? const Color(0xFF2563EB).withOpacity(0.3) 
-                : const Color(0xFFBFDBFE);
+                ? const Color(0xFF6B7B8C).withOpacity(0.3) 
+                : const Color(0xFFE2E8F0);
             align = CrossAxisAlignment.start;
             radius = const BorderRadius.only(
               topLeft: Radius.circular(16),
@@ -1412,11 +1364,11 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
               bottomRight: Radius.circular(16),
             );
           } else {
-            sender = 'System Log';
+            sender = tr('detail_sender_system_log');
             bubbleColor = isDark 
                 ? Colors.white.withOpacity(0.04) 
                 : Colors.black.withOpacity(0.04);
-            textColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C);
+            textColor = isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85);
             borderColor = isDark 
                 ? Colors.white.withOpacity(0.08) 
                 : Colors.black.withOpacity(0.08);
@@ -1516,12 +1468,12 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                         color: Colors.black.withOpacity(0.6),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.zoom_in_rounded, color: Colors.white, size: 12),
-                          SizedBox(width: 4),
-                          Text('View Full', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const Icon(Icons.zoom_in_rounded, color: Colors.white, size: 12),
+                          const SizedBox(width: 4),
+                          Text(tr('detail_view_full'), style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                         ],
                       ),
                     ),
@@ -1538,10 +1490,10 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
               padding: const EdgeInsets.all(12),
               margin: const EdgeInsets.only(bottom: 14),
               decoration: BoxDecoration(
-                color: isDark ? Colors.white.withOpacity(0.06) : const Color(0xFF0EA5E9).withOpacity(0.06),
+                color: isDark ? Colors.white.withOpacity(0.06) : const Color(0xFF6B7B8C).withOpacity(0.06),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isDark ? Colors.white.withOpacity(0.15) : const Color(0xFF0EA5E9).withOpacity(0.2),
+                  color: isDark ? Colors.white.withOpacity(0.15) : const Color(0xFF6B7B8C).withOpacity(0.2),
                 ),
               ),
               child: Row(
@@ -1549,12 +1501,12 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                   Container(
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.white10 : const Color(0xFF0EA5E9).withOpacity(0.1), 
+                      color: isDark ? Colors.white10 : const Color(0xFF6B7B8C).withOpacity(0.1), 
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
                       Icons.auto_awesome, 
-                      color: isDark ? Colors.white : const Color(0xFF0EA5E9), 
+                      color: isDark ? Colors.white : const Color(0xFF6B7B8C), 
                       size: 18,
                     ),
                   ),
@@ -1564,11 +1516,11 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'AI Verification Prediction',
+                          tr('detail_ai_verification_prediction'),
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.bold,
-                            color: isDark ? Colors.white70 : const Color(0xFF0EA5E9),
+                            color: isDark ? Colors.white70 : const Color(0xFF6B7B8C),
                           ),
                         ),
                         const SizedBox(height: 2),
@@ -1577,7 +1529,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
-                            color: isDark ? Colors.white : const Color(0xFF1C1917),
+                            color: isDark ? Colors.white : const Color(0xFF2B2B28),
                           ),
                         ),
                       ],
@@ -1586,7 +1538,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0EA5E9),
+                      color: const Color(0xFF6B7B8C),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
@@ -1604,19 +1556,19 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           ],
 
           Text(
-            'Worker Notes:',
+            tr('detail_worker_notes'),
             style: TextStyle(
               fontSize: 11, 
               fontWeight: FontWeight.bold, 
-              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+              color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85),
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            _report['completion_notes'] ?? 'No completion notes provided.',
+            _report['completion_notes'] ?? tr('detail_no_completion_notes'),
             style: TextStyle(
               fontSize: 14, 
-              color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1C1917), 
+              color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF2B2B28), 
               height: 1.4,
             ),
           ),
@@ -1627,15 +1579,15 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
               children: [
                 Icon(
                   Icons.check_circle_rounded, 
-                  color: isDark ? const Color(0xFF34D399) : const Color(0xFF059669), 
+                  color: isDark ? const Color(0xFF3F8F5E) : const Color(0xFF3F8F5E), 
                   size: 14,
                 ),
                 const SizedBox(width: 4),
                 Text(
-                  'Submitted: ${_formatTime(_report['completion_submitted_at'])}',
+                  '${tr('detail_submitted_prefix')}${_formatTime(_report['completion_submitted_at'])}',
                   style: TextStyle(
                     fontSize: 11, 
-                    color: isDark ? const Color(0xFF34D399) : const Color(0xFF059669), 
+                    color: isDark ? const Color(0xFF3F8F5E) : const Color(0xFF3F8F5E), 
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -1662,7 +1614,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           border: Border.all(
             color: isDark 
                 ? Colors.white.withOpacity(0.15) 
-                : const Color(0xFFE7E5E4), 
+                : const Color(0xFFE7E1D5), 
             width: 1.5,
           ),
         ),
@@ -1671,30 +1623,30 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
+                color: isDark ? Colors.white10 : const Color(0xFFF1EDE4),
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 Icons.engineering_rounded, 
-                color: isDark ? Colors.white : const Color(0xFF1C1917), 
+                color: isDark ? Colors.white : const Color(0xFF2B2B28), 
                 size: 32,
               ),
             ),
             const SizedBox(height: 14),
             Text(
-              'Accept & Start Maintenance',
+              tr('detail_accept_start_maintenance'),
               style: TextStyle(
-                fontSize: 16, 
-                fontWeight: FontWeight.bold, 
-                color: isDark ? Colors.white : const Color(0xFF1C1917),
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: isDark ? Colors.white : const Color(0xFF2B2B28),
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              'Let the authority know that you have arrived and are starting work on this task.',
+              tr('detail_accept_start_body'),
               style: TextStyle(
                 fontSize: 13, 
-                color: isDark ? Colors.white70 : const Color(0xFF78716C), 
+                color: isDark ? Colors.white70 : const Color(0xFF8A8A85), 
                 height: 1.4,
               ),
               textAlign: TextAlign.center,
@@ -1706,22 +1658,21 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
               child: ElevatedButton(
                 onPressed: _isLoadingAction ? null : _handleStartMaintenance,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.black,
-                  disabledBackgroundColor: Colors.white.withOpacity(0.5),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                  side: isDark ? null : BorderSide(color: Colors.black.withOpacity(0.15), width: 1.2),
+                  backgroundColor: PixelTheme.accentOrange,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: PixelTheme.textMuted,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
                   elevation: 0,
                 ),
                 child: _isLoadingAction
                     ? const SizedBox(
                         width: 22,
                         height: 22,
-                        child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2.5),
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
                       )
-                    : const Text(
-                        'Accept & Start Work',
-                        style: TextStyle(color: Colors.black, fontSize: 15, fontWeight: FontWeight.bold),
+                    : Text(
+                        tr('detail_accept_start_button'),
+                        style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
                       ),
               ),
             ),
@@ -1731,7 +1682,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     }
 
     if (status == ReportStatus.inMaintenance) {
-      final secondaryColor = isDark ? const Color(0xFF64748B) : const Color(0xFF78716C);
+      final secondaryColor = isDark ? const Color(0xFF64748B) : const Color(0xFF8A8A85);
 
       return Container(
         width: double.infinity,
@@ -1744,7 +1695,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           border: Border.all(
             color: isDark 
                 ? Colors.white.withOpacity(0.15) 
-                : const Color(0xFFE7E5E4), 
+                : const Color(0xFFE7E1D5), 
             width: 1.5,
           ),
         ),
@@ -1755,14 +1706,14 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.camera_alt_rounded, color: isDark ? Colors.white : const Color(0xFF1C1917), size: 22),
+                  Icon(Icons.camera_alt_rounded, color: isDark ? Colors.white : const Color(0xFF2B2B28), size: 22),
                   const SizedBox(width: 8),
                   Text(
-                    'Submit Completion Proof',
+                    tr('detail_submit_completion_proof'),
                     style: TextStyle(
-                      fontSize: 16, 
-                      fontWeight: FontWeight.bold, 
-                      color: isDark ? Colors.white : const Color(0xFF1C1917),
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : const Color(0xFF2B2B28),
                     ),
                   ),
                 ],
@@ -1781,19 +1732,19 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                     border: Border.all(
                       color: isDark 
                           ? Colors.white.withOpacity(0.15) 
-                          : const Color(0xFFE7E5E4), 
+                          : const Color(0xFFE7E1D5), 
                       width: 1.5,
                     ),
                   ),
-                  child: _proofImage != null
+                  child: (_proofImageBytes != null || _proofImageFile != null)
                       ? ClipRRect(
                           borderRadius: BorderRadius.circular(12),
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              kIsWeb
+                              _proofImageBytes != null
                                   ? Image.memory(_proofImageBytes!, fit: BoxFit.cover)
-                                  : Image.file(_proofImage!, fit: BoxFit.cover),
+                                  : const SizedBox.shrink(),
                               Positioned(
                                 bottom: 8,
                                 right: 8,
@@ -1803,12 +1754,12 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                                     color: Colors.black.withOpacity(0.6),
                                     borderRadius: BorderRadius.circular(20),
                                   ),
-                                  child: const Row(
+                                  child: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(Icons.cached_rounded, color: Colors.white, size: 12),
-                                      SizedBox(width: 4),
-                                      Text('Change', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                                      const Icon(Icons.cached_rounded, color: Colors.white, size: 12),
+                                      const SizedBox(width: 4),
+                                      Text(tr('detail_change'), style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                                     ],
                                   ),
                                 ),
@@ -1822,19 +1773,19 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                             Container(
                               padding: const EdgeInsets.all(10),
                               decoration: BoxDecoration(
-                                color: isDark ? Colors.white10 : const Color(0xFFF5F5F4),
+                                color: isDark ? Colors.white10 : const Color(0xFFF1EDE4),
                                 shape: BoxShape.circle,
                               ),
-                              child: Icon(Icons.add_a_photo_rounded, color: isDark ? Colors.white : const Color(0xFF1C1917), size: 28),
+                              child: Icon(Icons.add_a_photo_rounded, color: isDark ? Colors.white : const Color(0xFF2B2B28), size: 28),
                             ),
                             const SizedBox(height: 10),
                             Text(
-                              'Tap to attach completion photo',
-                              style: TextStyle(color: isDark ? Colors.white : const Color(0xFF1C1917), fontSize: 13, fontWeight: FontWeight.w600),
+                              tr('detail_tap_to_attach_photo'),
+                              style: TextStyle(color: isDark ? Colors.white : const Color(0xFF2B2B28), fontSize: 13, fontWeight: FontWeight.w600),
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              'JPG or PNG format, up to 10MB',
+                              tr('detail_photo_format_hint'),
                               style: TextStyle(color: secondaryColor, fontSize: 11),
                             ),
                           ],
@@ -1845,16 +1796,16 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
 
               // Notes text area
               Text(
-                'Completion Notes',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isDark ? Colors.white70 : const Color(0xFF78716C)),
+                tr('detail_completion_notes'),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isDark ? Colors.white70 : const Color(0xFF8A8A85)),
               ),
               const SizedBox(height: 6),
               TextFormField(
                 controller: _notesController,
                 maxLines: 3,
-                style: TextStyle(fontSize: 14, color: isDark ? Colors.white : const Color(0xFF1C1917)),
+                style: TextStyle(fontSize: 14, color: isDark ? Colors.white : const Color(0xFF2B2B28)),
                 decoration: InputDecoration(
-                  hintText: 'Describe the maintenance work completed (e.g. patched potholes, replaced lightbulb)...',
+                  hintText: tr('detail_completion_notes_hint'),
                   fillColor: isDark ? Colors.white.withOpacity(0.03) : Colors.black.withOpacity(0.01),
                   filled: true,
                   hintStyle: TextStyle(color: secondaryColor, fontSize: 13),
@@ -1862,13 +1813,13 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(
-                      color: isDark ? Colors.white.withOpacity(0.15) : const Color(0xFFE7E5E4),
+                      color: isDark ? Colors.white.withOpacity(0.15) : const Color(0xFFE7E1D5),
                     ),
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(
-                      color: isDark ? Colors.white.withOpacity(0.15) : const Color(0xFFE7E5E4),
+                      color: isDark ? Colors.white.withOpacity(0.15) : const Color(0xFFE7E1D5),
                     ),
                   ),
                   focusedBorder: OutlineInputBorder(
@@ -1878,7 +1829,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                 ),
                 validator: (val) {
                   if (val == null || val.trim().isEmpty) {
-                    return 'Please enter completion notes';
+                    return tr('detail_completion_notes_error');
                   }
                   return null;
                 },
@@ -1891,22 +1842,21 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                 child: ElevatedButton(
                   onPressed: _isLoadingAction ? null : _handleCompleteTask,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
-                    disabledBackgroundColor: Colors.white.withOpacity(0.5),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    side: isDark ? null : BorderSide(color: Colors.black.withOpacity(0.15), width: 1.2),
+                    backgroundColor: PixelTheme.accentOrange,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: PixelTheme.textMuted,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
                     elevation: 0,
                   ),
                   child: _isLoadingAction
                       ? const SizedBox(
                           width: 22,
                           height: 22,
-                          child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2.5),
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
                         )
-                      : const Text(
-                          'Submit Completion Proof',
-                          style: TextStyle(color: Colors.black, fontSize: 15, fontWeight: FontWeight.bold),
+                      : Text(
+                          tr('detail_submit_completion_proof'),
+                          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
                         ),
                 ),
               ),
@@ -1928,15 +1878,3 @@ class ResponseDecoder {
   }
 }
 
-class _StatusConfig {
-  final Color color;
-  final Color bg;
-  final IconData icon;
-  final String label;
-  const _StatusConfig({
-    required this.color,
-    required this.bg,
-    required this.icon,
-    required this.label,
-  });
-}

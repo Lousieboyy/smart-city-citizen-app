@@ -9,10 +9,17 @@ import '../user_session.dart';
 import 'login_screen.dart';
 import 'report_detail_screen.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/pixel_widgets.dart';
+import '../pixel_theme.dart';
+import '../localization/app_strings.dart';
 
 /// Report history screen.
 class HistoryScreen extends StatefulWidget {
-  const HistoryScreen({super.key});
+  /// Status to pre-filter to when arriving here from another tab (e.g. a
+  /// tapped stat card on Home/Profile). Null/'All' shows everything.
+  final String? initialStatusFilter;
+
+  const HistoryScreen({super.key, this.initialStatusFilter});
 
   @override
   State<HistoryScreen> createState() => _HistoryScreenState();
@@ -24,7 +31,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Timer? _refreshTimer;
 
   final _statusOptions = ['All', ...ReportStatus.all];
-  String _filterStatus = 'All';
+  late String _filterStatus = widget.initialStatusFilter ?? 'All';
 
   // Cache of geocoded addresses for items that have coordinate addresses
   final Map<int, String> _resolvedAddresses = {};
@@ -40,6 +47,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
         _fetchReports(silent: true);
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(HistoryScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Re-apply the requested filter each time we're navigated back to this
+    // tab with a new one (e.g. tapping a different stat card on Home).
+    if (widget.initialStatusFilter != null &&
+        widget.initialStatusFilter != oldWidget.initialStatusFilter) {
+      setState(() => _filterStatus = widget.initialStatusFilter!);
+    }
   }
 
   @override
@@ -87,7 +105,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error loading reports: $e'),
+          content: Text('${tr('history_load_error_prefix')}$e'),
           backgroundColor: Colors.redAccent,
           behavior: SnackBarBehavior.floating,
         ));
@@ -101,15 +119,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   String _formatTime(String? ts) {
-    if (ts == null) return 'Unknown';
+    if (ts == null) return tr('common_unknown');
     try {
       final dt   = DateTime.parse(ts).toLocal();
       final diff = DateTime.now().difference(dt);
-      if (diff.inMinutes < 60) return '${diff.inMinutes == 0 ? 1 : diff.inMinutes}m ago';
-      if (diff.inHours   < 24) return '${diff.inHours}h ago';
-      return '${diff.inDays}d ago';
+      if (diff.inMinutes < 60) return trCount('common_minutes_ago', diff.inMinutes == 0 ? 1 : diff.inMinutes);
+      if (diff.inHours   < 24) return trCount('common_hours_ago', diff.inHours);
+      return trCount('common_days_ago', diff.inDays);
     } catch (_) {
-      return 'Unknown';
+      return tr('common_unknown');
     }
   }
 
@@ -159,34 +177,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
-  /// Neon accent per category — mirrors the map pin colors
-  Color _getCategoryNeonColor(String category) {
-    final cat = category.toLowerCase();
-    if (cat.contains('road') || cat.contains('damage')) {
-      return const Color(0xFFFF6B35); // Neon orange
-    } else if (cat.contains('light') || cat.contains('lamp')) {
-      return const Color(0xFFFFE135); // Neon yellow
-    } else if (cat.contains('waste') || cat.contains('trash') || cat.contains('rubbish')) {
-      return const Color(0xFF39FF14); // Neon green
-    } else if (cat.contains('drain') || cat.contains('water')) {
-      return const Color(0xFF00CFFF); // Neon cyan
-    } else if (cat.contains('noise')) {
-      return const Color(0xFFDA00FF); // Neon purple
-    } else {
-      return const Color(0xFFFF2D78); // Neon pink
-    }
-  }
-
-  Widget _build3DPin(String category, _StatusConfig cfg, {int upvotes = 0}) {
+  Widget _build3DPin(String category, StatusConfig cfg, {int upvotes = 0}) {
     final double sizeMultiplier = 1.0 + math.min(upvotes * 0.10, 0.40);
     final double baseWidth = 24.0 * sizeMultiplier;
     final double baseHeight = 24.0 * sizeMultiplier;
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final Color glowColor = upvotes >= 5
-        ? const Color(0xFFF59E0B) // Amber gold for high votes
+        ? const Color(0xFFB45309) // Amber gold for high votes
         : upvotes >= 2
-            ? const Color(0xFFEC4899) // Hot pink for trending votes
+            ? const Color(0xFF52606D) // Hot pink for trending votes
             : (isDark ? Colors.white : const Color(0xFF1C1917));
 
     return SizedBox(
@@ -315,46 +315,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
   }
 
-  _StatusConfig _getStatusConfig(String status) {
-    switch (status) {
-      case ReportStatus.resolved:
-        return const _StatusConfig(
-            color: Color(0xFF059669),
-            bg: Color(0xFFECFDF5),
-            icon: Icons.check_circle_rounded,
-            label: 'Resolved');
-      case ReportStatus.inMaintenance:
-        return const _StatusConfig(
-            color: const Color(0xFF0EA5E9),
-            bg: const Color(0xFFF0F9FF),
-            icon: Icons.construction_rounded,
-            label: 'In Maintenance');
-      case ReportStatus.inProcess:
-        return const _StatusConfig(
-            color: Color(0xFFD97706),
-            bg: Color(0xFFFFFBEB),
-            icon: Icons.autorenew_rounded,
-            label: 'In Process');
-      case ReportStatus.inReview:
-        return const _StatusConfig(
-            color: Color(0xFF2563EB),
-            bg: Color(0xFFEFF6FF),
-            icon: Icons.rate_review_rounded,
-            label: 'In Review');
-      case ReportStatus.rejected:
-        return const _StatusConfig(
-            color: Color(0xFFEF4444),
-            bg: Color(0xFFFEF2F2),
-            icon: Icons.cancel_rounded,
-            label: 'Rejected');
-      default:
-        return const _StatusConfig(
-            color: Color(0xFFDC2626),
-            bg: Color(0xFFFEF2F2),
-            icon: Icons.hourglass_empty_rounded,
-            label: 'Pending');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -367,63 +327,49 @@ class _HistoryScreenState extends State<HistoryScreen> {
         centerTitle: false,
         automaticallyImplyLeading: false,
         title: Text(
-          'My Reports',
-          style: TextStyle(
-              color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917),
-              fontWeight: FontWeight.bold,
-              fontSize: 22),
+          tr('history_title'),
+          style: PixelTheme.pixelHeading(fontSize: 18, color: PixelTheme.primaryGreen),
         ),
         actions: [
           IconButton(
-            icon: Icon(Icons.refresh_rounded, color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1C1917)),
-            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh_rounded, color: PixelTheme.accentOrange),
+            tooltip: tr('common_refresh'),
             onPressed: _fetchReports,
           ),
         ],
       ),
       body: Column(
         children: [
-          // Status filter chips (uses Wrap to avoid horizontal scrolling/overflow on mobile)
-          Container(
-            color: Colors.transparent,
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-            width: double.infinity,
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
+          // Status filter chips — single scrollable row instead of a
+          // 2-row wrap, so the list below starts higher on screen.
+          SizedBox(
+            height: 52,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               children: _statusOptions.map((status) {
                 final isSelected = _filterStatus == status;
-                final isDark = Theme.of(context).brightness == Brightness.dark;
-                final Color chipBg = isSelected 
-                    ? (isDark ? Colors.white : const Color(0xFF0D9488))
-                    : (isDark ? Colors.black : const Color(0xFFF5F5F4));
-                final Color chipBorder = isSelected
-                    ? (isDark ? Colors.white : const Color(0xFF0D9488))
-                    : (isDark ? Colors.white24 : const Color(0xFFD6D3D1));
-                final Color chipTextColor = isSelected
-                    ? (isDark ? Colors.black : Colors.white)
-                    : (isDark ? Colors.grey : const Color(0xFF78716C));
+                final Color chipBg = isSelected ? PixelTheme.primaryGreen : Colors.white;
+                final Color chipTextColor = isSelected ? Colors.white : PixelTheme.textSecondary;
 
-                return GestureDetector(
-                  onTap: () => setState(() => _filterStatus = status),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: chipBg,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: chipBorder,
-                        width: 1.2,
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: GestureDetector(
+                    onTap: () => setState(() => _filterStatus = status),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: chipBg,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: PixelTheme.pixelShadow,
                       ),
-                    ),
-                    child: Text(
-                      status,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: chipTextColor,
+                      child: Center(
+                        child: Text(
+                          status == 'All' ? tr('category_All') : trStatus(status),
+                          style: PixelTheme.pixelBody(fontSize: 13, color: chipTextColor, fontWeight: FontWeight.w600),
+                        ),
                       ),
                     ),
                   ),
@@ -431,33 +377,31 @@ class _HistoryScreenState extends State<HistoryScreen> {
               }).toList(),
             ),
           ),
+          const SizedBox(height: 12),
 
           // Report list
           Expanded(
             child: _isLoading
-                ? Center(
-                    child: CircularProgressIndicator(color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0D9488)))
+                ? const Center(
+                    child: CircularProgressIndicator(color: PixelTheme.accentOrange))
                 : RefreshIndicator(
                     onRefresh: _fetchReports,
-                    color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF0D9488),
+                    color: PixelTheme.accentOrange,
                     child: _filteredReports.isEmpty
                         ? ListView(
                             children: [
                               SizedBox(
                                   height:
                                       MediaQuery.of(context).size.height * 0.25),
-                              const Center(
+                              Center(
                                 child: Column(
                                   children: [
-                                    Icon(Icons.inbox_rounded,
-                                        size: 64, color: Color(0xFF64748B)),
-                                    SizedBox(height: 16),
+                                    const Icon(Icons.inbox_rounded,
+                                        size: 64, color: PixelTheme.textMuted),
+                                    const SizedBox(height: 16),
                                     Text(
-                                      'No reports found.',
-                                      style: TextStyle(
-                                          color: Color(0xFF94A3B8),
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w500),
+                                      tr('history_empty'),
+                                      style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textSecondary, fontWeight: FontWeight.w600),
                                     ),
                                   ],
                                 ),
@@ -465,7 +409,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             ],
                           )
                         : ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 120), // padded at bottom for float nav bar
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 140), // padded at bottom for float nav bar
                             itemCount: _filteredReports.length,
                             itemBuilder: (_, i) =>
                                 _buildHistoryCard(_filteredReports[i]),
@@ -478,11 +422,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Widget _buildHistoryCard(Map<String, dynamic> item) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final id = item['id'] as int? ?? 0;
     final status = item['status'] ?? ReportStatus.pending;
-    final cfg    = _getStatusConfig(status);
-    final rawAddress = item['address'] ?? item['location'] ?? 'Location unknown';
+    final cfg    = getStatusConfig(status);
+    final rawAddress = item['address'] ?? item['location'] ?? tr('common_location_unknown');
     final int upvotes = item['upvotes'] is int
         ? item['upvotes']
         : (int.tryParse(item['upvotes']?.toString() ?? '0') ?? 0);
@@ -521,7 +464,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _build3DPin(item['categories'] ?? '', cfg, upvotes: upvotes),
+                Container(
+                  width: 42,
+                  height: 42,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: cfg.color.withOpacity(0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(_getCategoryIcon((item['categories'] ?? '').toString()), size: 19, color: cfg.color),
+                ),
                 const SizedBox(width: 14),
                   Expanded(
                     child: Column(
@@ -533,11 +485,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           children: [
                             Expanded(
                               child: Text(
-                                item['categories'] ?? 'Unknown Issue',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                    color: isDark ? Colors.white : const Color(0xFF1C1917)),
+                                item['categories'] != null ? trCategory(item['categories'].toString()) : tr('history_unknown_issue'),
+                                style: PixelTheme.pixelHeading(fontSize: 14, color: PixelTheme.textPrimary),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -546,42 +495,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 4),
-                                  decoration: BoxDecoration(
-                                      color: cfg.color.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(20),
-                                      border: Border.all(color: cfg.color.withOpacity(0.2))),
-                                  child: Text(cfg.label,
-                                      style: TextStyle(
-                                          color: cfg.color,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold)),
-                                ),
+                                PixelBadge(text: trStatus(status), color: cfg.color),
                                 if (upvotes > 0) ...[
                                   const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 4),
-                                    decoration: BoxDecoration(
-                                        color: const Color(0xFFEC4899).withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(20),
-                                        border: Border.all(color: const Color(0xFFEC4899).withOpacity(0.2))),
-                                    child: Text('▲ $upvotes Upvotes',
-                                        style: const TextStyle(
-                                            color: Color(0xFFEC4899),
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.bold)),
-                                  ),
+                                  PixelBadge(text: '▲ $upvotes', color: PixelTheme.accentCyan),
                                 ],
                               ],
                             ),
                           ],
                         ),
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 4),
                         Text(_formatTime(item['timestamp']),
-                            style: TextStyle(color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 11, fontWeight: FontWeight.w500)),
+                            style: PixelTheme.pixelCaption(fontSize: 11, color: PixelTheme.textMuted)),
                       ],
                     ),
                   ),
@@ -591,9 +516,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
               // Description
               Text(
-                item['description'] ?? 'No description provided',
-                style: TextStyle(
-                    color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF44403C), fontSize: 13, height: 1.4),
+                item['description'] ?? tr('history_no_description'),
+                style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textSecondary, fontWeight: FontWeight.normal),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -602,13 +526,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
               // Location
               Row(
                 children: [
-                  Icon(Icons.location_on_outlined, size: 14, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C)),
+                  const Icon(Icons.location_on_outlined, size: 14, color: PixelTheme.accentOrange),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       displayAddress,
-                      style: TextStyle(
-                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 12),
+                      style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -621,9 +544,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 const SizedBox(height: 10),
                 _buildInfoChip(
                   icon: Icons.auto_awesome,
-                  label: 'AI Match: ${item['ai_prediction']} (${item['confidence'] ?? ''})',
-                  color: isDark ? Colors.white : const Color(0xFF0D9488),
-                  bg: isDark ? Colors.white : const Color(0xFF0D9488),
+                  label: '${tr('history_ai_match_prefix')}${item['ai_prediction']} (${item['confidence'] ?? ''})',
+                  color: PixelTheme.accentOrange,
                 ),
               ],
 
@@ -632,9 +554,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 const SizedBox(height: 6),
                 _buildInfoChip(
                   icon: Icons.business_rounded,
-                  label: 'Department: ${item['assigned_department']}',
-                  color: isDark ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
-                  bg: isDark ? const Color(0xFF38BDF8) : const Color(0xFF0284C7),
+                  label: '${tr('history_department_prefix')}${item['assigned_department']}',
+                  color: PixelTheme.accentCyan,
                 ),
               ],
 
@@ -643,9 +564,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 const SizedBox(height: 6),
                 _buildInfoChip(
                   icon: Icons.engineering_rounded,
-                  label: 'Assigned Worker: ${item['assigned_worker']}',
-                  color: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
-                  bg: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
+                  label: '${tr('history_assigned_worker_prefix')}${item['assigned_worker']}',
+                  color: PixelTheme.accentYellow,
                 ),
               ],
 
@@ -654,72 +574,42 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   (item['authority_notes'] as String).isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: isDark ? Colors.white.withOpacity(0.03) : const Color(0xFFF5F5F4),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFE7E5E4)),
+                    color: PixelTheme.bgInput,
+                    borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
-                        children: const [
-                          Icon(Icons.forum_rounded, size: 13, color: Color(0xFF94A3B8)),
-                          SizedBox(width: 6),
-                          Text('Dispatch Thread',
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF94A3B8))),
+                        children: [
+                          const Icon(Icons.forum_rounded, size: 14, color: PixelTheme.textMuted),
+                          const SizedBox(width: 6),
+                          Text(tr('history_dispatch_thread'),
+                              style: PixelTheme.pixelCaption(fontSize: 11, color: PixelTheme.textMuted)),
                         ],
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 10),
                       ...(item['authority_notes'] as String)
                           .split('\n')
                           .where((l) => l.isNotEmpty)
                           .map((line) {
                         final isAuth  = line.startsWith('[Authority]');
                         final isAdmin = line.startsWith('[Admin]');
-                        Color bubbleColor = isDark ? Colors.white.withOpacity(0.04) : const Color(0xFFF5F5F4);
-                        Color txtColor = isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1C1917);
-                        Color borderColor = isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFE7E5E4);
-                        if (isDark) {
-                          if (isAuth) {
-                            bubbleColor = const Color(0xFF059669).withOpacity(0.1);
-                            txtColor = const Color(0xFF34D399); // emerald-400
-                            borderColor = const Color(0xFF059669).withOpacity(0.2);
-                          } else if (isAdmin) {
-                            bubbleColor = const Color(0xFF2563EB).withOpacity(0.1);
-                            txtColor = const Color(0xFF60A5FA); // blue-400
-                            borderColor = const Color(0xFF2563EB).withOpacity(0.2);
-                          }
-                        } else {
-                          if (isAuth) {
-                            bubbleColor = const Color(0xFFECFDF5);
-                            txtColor = const Color(0xFF047857); // emerald-700
-                            borderColor = const Color(0xFFA7F3D0);
-                          } else if (isAdmin) {
-                            bubbleColor = const Color(0xFFEFF6FF);
-                            txtColor = const Color(0xFF1D4ED8); // blue-700
-                            borderColor = const Color(0xFFBFDBFE);
-                          }
-                        }
+                        final Color txtColor = isAuth
+                            ? PixelTheme.accentGreen
+                            : (isAdmin ? PixelTheme.accentCyan : PixelTheme.textPrimary);
                         return Container(
                           margin: const EdgeInsets.only(bottom: 6),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 6),
+                              horizontal: 12, vertical: 8),
                           decoration: BoxDecoration(
-                            color: bubbleColor,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: borderColor, width: 0.8),
+                            color: PixelTheme.bgSurface,
+                            borderRadius: BorderRadius.circular(14),
                           ),
                           child: Text(line,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: txtColor,
-                                fontWeight: FontWeight.w500,
-                              )),
+                              style: PixelTheme.pixelBody(fontSize: 13, color: txtColor, fontWeight: FontWeight.w500)),
                         );
                       }),
                     ],
@@ -738,25 +628,20 @@ class _HistoryScreenState extends State<HistoryScreen> {
               if (item['completion_image_path'] != null) ...[
                 const SizedBox(height: 12),
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: isDark ? Colors.white.withOpacity(0.03) : const Color(0xFFF5F5F4),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: isDark ? Colors.white.withOpacity(0.08) : const Color(0xFFE7E5E4)),
+                    color: PixelTheme.accentYellow.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(16),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.verified_rounded,
-                              size: 14, color: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706)),
+                          const Icon(Icons.verified_rounded, size: 14, color: PixelTheme.accentYellow),
                           const SizedBox(width: 6),
-                          Text('Worker Completion Proof',
-                              style: TextStyle(
-                                  color: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12)),
+                          Text(tr('history_completion_proof'),
+                              style: PixelTheme.pixelCaption(fontSize: 11, color: PixelTheme.accentYellow)),
                         ],
                       ),
                       const SizedBox(height: 10),
@@ -767,8 +652,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           (item['completion_notes'] as String).isNotEmpty) ...[
                         const SizedBox(height: 8),
                         Text(item['completion_notes'],
-                            style: TextStyle(
-                                color: isDark ? const Color(0xFFE9D5FF) : const Color(0xFF44403C), fontSize: 12, fontWeight: FontWeight.w500)),
+                            style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary, fontWeight: FontWeight.w500)),
                       ],
                     ],
                   ),
@@ -784,14 +668,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
     required IconData icon,
     required String label,
     required Color color,
-    required Color bg,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.2), width: 1.0),
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -799,8 +681,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           Icon(icon, size: 12, color: color),
           const SizedBox(width: 6),
           Text(label,
-              style: TextStyle(
-                  color: color, fontSize: 11, fontWeight: FontWeight.bold)),
+              style: PixelTheme.pixelBody(color: color, fontSize: 13, fontWeight: FontWeight.bold)),
         ],
       ),
     );
@@ -813,17 +694,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
         MaterialPageRoute(builder: (_) => FullScreenImageViewer(imageUrl: url)),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Image.network(
-          url,
-          height: height,
-          width: double.infinity,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Container(
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          child: Image.network(
+            url,
             height: height,
-            color: Colors.white.withOpacity(0.05),
-            child: const Center(
-                child: Icon(Icons.broken_image_outlined, color: Color(0xFF94A3B8))),
+            width: double.infinity,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+              height: height,
+              color: PixelTheme.bgInput,
+              child: const Center(
+                  child: Icon(Icons.broken_image_outlined, color: PixelTheme.textMuted)),
+            ),
           ),
         ),
       ),
@@ -831,18 +714,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 }
 
-class _StatusConfig {
-  final Color    color;
-  final Color    bg;
-  final IconData icon;
-  final String   label;
-  const _StatusConfig({
-    required this.color,
-    required this.bg,
-    required this.icon,
-    required this.label,
-  });
-}
 
 class FullScreenImageViewer extends StatelessWidget {
   final String imageUrl;

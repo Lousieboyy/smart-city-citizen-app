@@ -11,12 +11,17 @@ import 'dart:convert';
 import 'dart:math' as math;
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
+import '../notification_settings.dart';
 import '../user_session.dart';
 import 'login_screen.dart';
 import '../theme_manager.dart';
 
 import '../widgets/glass_card.dart';
 import '../widgets/background_decorator.dart';
+import '../pixel_theme.dart';
+import '../widgets/pixel_widgets.dart';
+import '../localization/app_strings.dart';
+import '../localization/locale_manager.dart';
 
 /// Main shell screen with bottom navigation.
 class HomeScreen extends StatefulWidget {
@@ -31,12 +36,16 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _hasUnreadNotification = false;
   StreamSubscription<StatusChange>? _notifSub;
 
-  late final List<Widget> _widgetOptions = [
-    const DashboardContent(),
-    const MapViewScreen(),
-    const HistoryScreen(),
-    const ProfileScreen(),
-  ];
+  // Set when a stat card on Home/Profile is tapped, so the History tab can
+  // land pre-filtered instead of making the user reapply the filter by hand.
+  String? _pendingHistoryFilter;
+
+  List<Widget> get _widgetOptions => [
+        DashboardContent(onStatTap: _goToHistory),
+        const MapViewScreen(),
+        HistoryScreen(initialStatusFilter: _pendingHistoryFilter),
+        ProfileScreen(onViewReportsTap: () => _goToHistory(null)),
+      ];
 
   @override
   void initState() {
@@ -65,23 +74,22 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  /// Switches to the History tab, optionally pre-filtered to [status].
+  void _goToHistory(String? status) {
+    setState(() {
+      _pendingHistoryFilter = status;
+      _selectedIndex = 2;
+      _hasUnreadNotification = false;
+    });
+  }
+
   Widget _buildTabIcon(IconData icon, bool isActive, Color activeColor, {bool showBadge = false}) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    
-    // Calculate unselected color dynamically
-    final inactiveColor = isDark
-        ? (_selectedIndex == 1
-            ? Colors.white.withOpacity(0.85)
-            : Colors.white.withOpacity(0.6))
-        : (_selectedIndex == 1
-            ? const Color(0xFF78716C)
-            : const Color(0xFFA8A29E));
-            
+    final inactiveColor = const Color(0xFFB7B3AC);
     final color = isActive ? activeColor : inactiveColor;
-    
+
     return TweenAnimationBuilder<double>(
       key: ValueKey("${icon.codePoint}_${isActive}"),
-      tween: Tween<double>(begin: isActive ? 1.0 : 1.18, end: isActive ? 1.18 : 1.0),
+      tween: Tween<double>(begin: isActive ? 1.0 : 1.1, end: isActive ? 1.1 : 1.0),
       duration: const Duration(milliseconds: 250),
       curve: Curves.easeOutBack,
       builder: (context, scale, child) {
@@ -91,30 +99,7 @@ class _HomeScreenState extends State<HomeScreen> {
             clipBehavior: Clip.none,
             alignment: Alignment.center,
             children: [
-              Icon(
-                icon,
-                color: color,
-                size: 24,
-                shadows: (isActive && isDark) ? [
-                  const Shadow(
-                    color: Colors.white,
-                    blurRadius: 10,
-                  ),
-                  Shadow(
-                    color: Colors.white.withOpacity(0.6),
-                    blurRadius: 20,
-                  ),
-                ] : (isActive && !isDark) ? [
-                  const Shadow(
-                    color: Colors.white,
-                    blurRadius: 6,
-                  ),
-                  Shadow(
-                    color: const Color(0xFF0D9488).withOpacity(0.4),
-                    blurRadius: 15,
-                  ),
-                ] : null,
-              ),
+              Icon(icon, color: color, size: 24),
               if (showBadge)
                 Positioned(
                   top: -2,
@@ -123,9 +108,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: 7,
                     height: 7,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFEF4444),
+                      color: PixelTheme.alertRed,
                       shape: BoxShape.circle,
-                      border: Border.all(color: isDark ? Colors.black : Colors.white, width: 0.8),
+                      border: Border.all(color: Colors.white, width: 0.8),
                     ),
                   ),
                 ),
@@ -141,26 +126,43 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildInactiveTabIcon(IconData icon, {bool showBadge = false}) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final activeColor = isDark ? Colors.white : const Color(0xFF0D9488);
-    return _buildTabIcon(icon, false, activeColor, showBadge: showBadge);
+    return _buildTabIcon(icon, false, PixelTheme.primaryGreen, showBadge: showBadge);
+  }
+
+  Widget _navItem(int index, IconData icon, String label, {bool showBadge = false}) {
+    final isActive = _selectedIndex == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () => _onItemTapped(index),
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              isActive
+                  ? _buildActiveTabIcon(icon, PixelTheme.primaryGreen, showBadge: showBadge)
+                  : _buildInactiveTabIcon(icon, showBadge: showBadge),
+              const SizedBox(height: 3),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: PixelTheme.pixelCaption(
+                  fontSize: 10,
+                  color: isActive ? PixelTheme.primaryGreen : const Color(0xFFB7B3AC),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final activeColor = isDark
-        ? Colors.white
-        : const Color(0xFF0D9488); // Teal for light mode active tab
-
-    final unselectedColor = isDark
-        ? (_selectedIndex == 1
-            ? Colors.white.withOpacity(0.85)
-            : Colors.white.withOpacity(0.6))
-        : (_selectedIndex == 1
-            ? const Color(0xFF78716C)
-            : const Color(0xFFA8A29E));
-
     return BackgroundDecorator(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -173,46 +175,66 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: EdgeInsets.only(
             bottom: MediaQuery.of(context).padding.bottom > 0
                 ? MediaQuery.of(context).padding.bottom
-                : 20,
+                : 16,
             left: 16,
             right: 16,
           ),
-          child: GlassCard(
-            color: isDark
-                ? const Color(0xFF1C1917) // Fully solid dark charcoal in dark mode
-                : Colors.white, // Fully solid white in light mode
-            padding: EdgeInsets.zero,
-            borderRadius: BorderRadius.circular(24),
-            child: BottomNavigationBar(
-              elevation: 0,
-              backgroundColor: Colors.transparent,
-              type: BottomNavigationBarType.fixed,
-              currentIndex: _selectedIndex,
-              selectedItemColor: activeColor,
-              unselectedItemColor: unselectedColor,
-              selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
-              unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 11),
-              onTap: _onItemTapped,
-              items: [
-                BottomNavigationBarItem(
-                  icon: _buildInactiveTabIcon(Icons.space_dashboard_rounded),
-                  activeIcon: _buildActiveTabIcon(Icons.space_dashboard_rounded, activeColor),
-                  label: 'Home',
+          child: SizedBox(
+            height: 108,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.bottomCenter,
+              children: [
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    height: 72,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(30),
+                      boxShadow: PixelTheme.pixelShadow,
+                    ),
+                    child: Row(
+                      children: [
+                        _navItem(0, Icons.home_rounded, tr('nav_home')),
+                        _navItem(1, Icons.map_rounded, tr('nav_map')),
+                        const SizedBox(width: 64),
+                        _navItem(2, Icons.history_rounded, tr('nav_history'), showBadge: _hasUnreadNotification),
+                        _navItem(3, Icons.person_rounded, tr('nav_profile')),
+                      ],
+                    ),
+                  ),
                 ),
-                BottomNavigationBarItem(
-                  icon: _buildInactiveTabIcon(Icons.explore_rounded),
-                  activeIcon: _buildActiveTabIcon(Icons.explore_rounded, activeColor),
-                  label: 'Map',
-                ),
-                BottomNavigationBarItem(
-                  icon: _buildInactiveTabIcon(Icons.task_alt_rounded, showBadge: _hasUnreadNotification),
-                  activeIcon: _buildActiveTabIcon(Icons.task_alt_rounded, activeColor, showBadge: _hasUnreadNotification),
-                  label: 'History',
-                ),
-                BottomNavigationBarItem(
-                  icon: _buildInactiveTabIcon(Icons.face_rounded),
-                  activeIcon: _buildActiveTabIcon(Icons.face_rounded, activeColor),
-                  label: 'Profile',
+                Positioned(
+                  bottom: 42,
+                  child: GestureDetector(
+                    onTap: () async {
+                      final result = await Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const CitizenReportScreen()),
+                      );
+                      if (result == true) setState(() {});
+                    },
+                    child: Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                        color: PixelTheme.accentOrange,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: PixelTheme.accentOrange.withOpacity(0.45),
+                            offset: const Offset(0, 8),
+                            blurRadius: 18,
+                          ),
+                        ],
+                        border: Border.all(color: PixelTheme.bgPrimary, width: 4),
+                      ),
+                      child: const Icon(Icons.add_rounded, color: Colors.white, size: 28),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -227,7 +249,11 @@ class _HomeScreenState extends State<HomeScreen> {
 //  DASHBOARD TAB
 // ─────────────────────────────────────────────────────────────
 class DashboardContent extends StatefulWidget {
-  const DashboardContent({super.key});
+  /// Called with a status string (or null for "all") when a stat card is
+  /// tapped, so Home can switch to History pre-filtered.
+  final ValueChanged<String?>? onStatTap;
+
+  const DashboardContent({super.key, this.onStatTap});
 
   @override
   State<DashboardContent> createState() => _DashboardContentState();
@@ -255,8 +281,11 @@ class _DashboardContentState extends State<DashboardContent> {
     super.initState();
     _fetchDashboardData();
 
-    // Start polling for status changes and show banner on change
-    NotificationService.instance.start(intervalSeconds: 60);
+    // Start polling for status changes and show banner on change,
+    // unless the user has turned notifications off in Profile.
+    if (NotificationSettings.enabledNotifier.value) {
+      NotificationService.instance.start(intervalSeconds: 60);
+    }
     _notifSub = NotificationService.instance.changes.listen((change) {
       if (!mounted) return;
       setState(() {
@@ -366,15 +395,15 @@ class _DashboardContentState extends State<DashboardContent> {
   }
 
   String _formatTime(String? ts) {
-    if (ts == null || ts.isEmpty) return 'Unknown';
+    if (ts == null || ts.isEmpty) return tr('common_unknown');
     try {
       final dt   = DateTime.parse(ts).toLocal();
       final diff = DateTime.now().difference(dt);
-      if (diff.inMinutes < 60) return '${diff.inMinutes == 0 ? 1 : diff.inMinutes}m ago';
-      if (diff.inHours   < 24) return '${diff.inHours}h ago';
-      return '${diff.inDays}d ago';
+      if (diff.inMinutes < 60) return trCount('common_minutes_ago', diff.inMinutes == 0 ? 1 : diff.inMinutes);
+      if (diff.inHours   < 24) return trCount('common_hours_ago', diff.inHours);
+      return trCount('common_days_ago', diff.inDays);
     } catch (_) {
-      return 'Unknown';
+      return tr('common_unknown');
     }
   }
 
@@ -395,7 +424,7 @@ class _DashboardContentState extends State<DashboardContent> {
     }
   }
 
-  Widget _build3DPin(String category, _StatusConfig cfg, {int upvotes = 0}) {
+  Widget _build3DPin(String category, StatusConfig cfg, {int upvotes = 0}) {
     final double sizeMultiplier = 1.0 + math.min(upvotes * 0.10, 0.40);
     final double baseWidth = 24.0 * sizeMultiplier;
     final double baseHeight = 24.0 * sizeMultiplier;
@@ -533,57 +562,30 @@ class _DashboardContentState extends State<DashboardContent> {
     );
   }
 
-  _StatusConfig _getStatusConfig(String status) {
-    switch (status) {
-      case ReportStatus.resolved:
-        return const _StatusConfig(
-            color: Color(0xFF059669),
-            bg: Color(0xFFECFDF5),
-            icon: Icons.check_circle_rounded,
-            label: 'Resolved');
-      case ReportStatus.inMaintenance:
-        return const _StatusConfig(
-            color: const Color(0xFF0EA5E9),
-            bg: const Color(0xFFF0F9FF),
-            icon: Icons.construction_rounded,
-            label: 'In Maintenance');
-      case ReportStatus.inProcess:
-        return const _StatusConfig(
-            color: Color(0xFFD97706),
-            bg: Color(0xFFFFFBEB),
-            icon: Icons.autorenew_rounded,
-            label: 'In Process');
-      case ReportStatus.inReview:
-        return const _StatusConfig(
-            color: Color(0xFF2563EB),
-            bg: Color(0xFFEFF6FF),
-            icon: Icons.rate_review_rounded,
-            label: 'In Review');
-      case ReportStatus.rejected:
-        return const _StatusConfig(
-            color: Color(0xFFEF4444),
-            bg: Color(0xFFFEF2F2),
-            icon: Icons.cancel_rounded,
-            label: 'Rejected');
-      default:
-        return const _StatusConfig(
-            color: Color(0xFFDC2626),
-            bg: Color(0xFFFEF2F2),
-            icon: Icons.hourglass_empty_rounded,
-            label: 'Pending');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final isWorker = UserSession.instance.role.toLowerCase().contains('worker');
 
     if (_isLoading) {
-      return const Scaffold(
+      return Scaffold(
         backgroundColor: Colors.transparent,
         body: Center(
-          child: CircularProgressIndicator(color: Colors.white),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(strokeWidth: 3, color: PixelTheme.accentOrange),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                tr('home_loading_reports'),
+                style: PixelTheme.pixelCaption(fontSize: 12, color: PixelTheme.textSecondary),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -592,22 +594,38 @@ class _DashboardContentState extends State<DashboardContent> {
       return Scaffold(
         backgroundColor: Colors.transparent,
         body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.cloud_off_rounded, size: 64, color: Color(0xFF94A3B8)),
-              const SizedBox(height: 16),
-              const Text(
-                'Could not load dashboard data.',
-                style: TextStyle(color: Color(0xFF94A3B8), fontSize: 16, fontWeight: FontWeight.w500),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: PixelCard(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.cloud_off_rounded, size: 40, color: PixelTheme.alertRed),
+                  const SizedBox(height: 14),
+                  Text(
+                    tr('home_error_title'),
+                    textAlign: TextAlign.center,
+                    style: PixelTheme.pixelHeading(fontSize: 16, color: PixelTheme.textPrimary),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    tr('home_error_body'),
+                    textAlign: TextAlign.center,
+                    style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary),
+                  ),
+                  const SizedBox(height: 18),
+                  PixelButton(
+                    text: tr('common_retry'),
+                    color: PixelTheme.alertRed,
+                    height: 46,
+                    fontSize: 13,
+                    icon: Icons.refresh_rounded,
+                    onPressed: _fetchDashboardData,
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: _fetchDashboardData,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Retry'),
-              ),
-            ],
+            ),
           ),
         ),
       );
@@ -619,7 +637,7 @@ class _DashboardContentState extends State<DashboardContent> {
         children: [
           RefreshIndicator(
             onRefresh: _fetchDashboardData,
-            color: Colors.white,
+            color: PixelTheme.accentOrange,
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
               child: Column(
@@ -639,16 +657,8 @@ class _DashboardContentState extends State<DashboardContent> {
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: const [
-                          Text(
-                            "My Tasks To-Do",
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
+                        children: [
+                          _buildSectionHeading(tr('home_worker_tasks_todo'), Icons.assignment_turned_in_outlined, PixelTheme.accentOrange),
                         ],
                       ),
                     ),
@@ -662,18 +672,18 @@ class _DashboardContentState extends State<DashboardContent> {
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(
+                                const Icon(
                                   Icons.task_alt_rounded,
-                                  color: isDark ? Colors.white70 : const Color(0xFF0D9488),
+                                  color: PixelTheme.accentOrange,
                                   size: 36,
                                 ),
                                 const SizedBox(height: 12),
                                 Text(
-                                  "No pending tasks assigned. You're all caught up!",
-                                  style: TextStyle(
-                                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
+                                  tr('home_worker_no_tasks'),
+                                  style: PixelTheme.pixelBody(
                                     fontSize: 13,
-                                    fontWeight: FontWeight.w500,
+                                    color: PixelTheme.textSecondary,
+                                    fontWeight: FontWeight.w600,
                                   ),
                                   textAlign: TextAlign.center,
                                 ),
@@ -700,16 +710,8 @@ class _DashboardContentState extends State<DashboardContent> {
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: const [
-                            Text(
-                              "Submitted (Awaiting Review)",
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                                letterSpacing: -0.5,
-                              ),
-                            ),
+                          children: [
+                            _buildSectionHeading(tr('home_worker_submitted'), Icons.hourglass_top_rounded, PixelTheme.accentCyan),
                           ],
                         ),
                       ),
@@ -730,27 +732,47 @@ class _DashboardContentState extends State<DashboardContent> {
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: const [
-                          Text(
-                            "Recent Reports",
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
+                        children: [
+                          _buildSectionHeading(tr('home_recent_reports'), Icons.history_rounded, PixelTheme.accentOrange),
                         ],
                       ),
                     ),
                     const SizedBox(height: 12),
                     if (_recentReports.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 36, horizontal: 20),
-                        child: Center(
-                          child: Text(
-                            "No reports submitted yet. Create one!",
-                            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: PixelCard(
+                          padding: const EdgeInsets.all(22),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.assignment_outlined, color: PixelTheme.accentOrange, size: 32),
+                              const SizedBox(height: 12),
+                              Text(
+                                tr('home_no_reports_title'),
+                                style: PixelTheme.pixelHeading(fontSize: 15, color: PixelTheme.textPrimary),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                tr('home_no_reports_body'),
+                                textAlign: TextAlign.center,
+                                style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary),
+                              ),
+                              const SizedBox(height: 16),
+                              PixelButton(
+                                text: tr('common_file_report'),
+                                color: PixelTheme.accentOrange,
+                                height: 46,
+                                fontSize: 13,
+                                onPressed: () async {
+                                  final result = await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => const CitizenReportScreen()),
+                                  );
+                                  if (result == true) _fetchDashboardData();
+                                },
+                              ),
+                            ],
                           ),
                         ),
                       )
@@ -771,7 +793,7 @@ class _DashboardContentState extends State<DashboardContent> {
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: _buildOverviewSection(),
                   ),
-                  const SizedBox(height: 120), // padding to prevent being hidden by floating nav bar
+                  const SizedBox(height: 140), // padding to prevent being hidden by floating nav bar
                 ],
               ),
             ),
@@ -832,9 +854,9 @@ class _DashboardContentState extends State<DashboardContent> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Report Status Updated',
-                    style: TextStyle(
+                  Text(
+                    tr('home_notif_banner_title'),
+                    style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
@@ -842,7 +864,7 @@ class _DashboardContentState extends State<DashboardContent> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${change.category}: ${change.oldStatus} → ${change.newStatus}',
+                    '${change.category}: ${trStatus(change.oldStatus)} → ${trStatus(change.newStatus)}',
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.85),
                       fontSize: 12,
@@ -866,9 +888,13 @@ class _DashboardContentState extends State<DashboardContent> {
 
   String _getFormattedDate() {
     final now = DateTime.now();
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    final days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    
+    final months = LocaleManager.isBm
+        ? ['Jan', 'Feb', 'Mac', 'Apr', 'Mei', 'Jun', 'Jul', 'Ogo', 'Sep', 'Okt', 'Nov', 'Dis']
+        : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final days = LocaleManager.isBm
+        ? ['Isn', 'Sel', 'Rab', 'Kha', 'Jum', 'Sab', 'Ahd']
+        : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
     final dayName = days[now.weekday - 1];
     final monthName = months[now.month - 1];
     return "$dayName, $monthName ${now.day}, ${now.year}";
@@ -877,200 +903,162 @@ class _DashboardContentState extends State<DashboardContent> {
   Widget _buildHeader(BuildContext context) {
     final username = UserSession.instance.username;
     final isWorker = UserSession.instance.role.toLowerCase().contains('worker');
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Container(
-          padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 16, 20, 26),
+      decoration: const BoxDecoration(
+        color: PixelTheme.primaryGreen,
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(32),
+          bottomRight: Radius.circular(32),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // Date at the top, separate from row to keep Row centering clean
               Text(
                 _getFormattedDate(),
-                style: const TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.8,
+                style: PixelTheme.pixelCaption(fontSize: 12, color: Colors.white.withOpacity(0.7)),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.16),
+                  borderRadius: BorderRadius.circular(20),
                 ),
-              ),
-              const SizedBox(height: 6),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          isWorker ? "Worker Portal" : "Welcome back,",
-                          style: TextStyle(
-                            color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C),
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                username,
-                                style: TextStyle(
-                                  color: isDark ? Colors.white : const Color(0xFF1C1917),
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: -0.5,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: isDark ? Colors.white.withOpacity(0.18) : const Color(0xFFF5F5F4),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: isDark ? Colors.white.withOpacity(0.35) : const Color(0xFFD6D3D1),
-                                  width: 1.0,
-                                ),
-                              ),
-                              child: Text(
-                                UserSession.instance.role.toUpperCase(),
-                                style: TextStyle(
-                                    color: isDark ? Colors.white70 : const Color(0xFF78716C),
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: 1.2),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                      border: Border.all(color: isDark ? Colors.white : const Color(0xFFE7E5E4), width: 1.5),
-                    ),
-                    child: ClipOval(
-                      child: Image.asset(
-                        getAvatarPath(username),
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 52),
-              Row(
-                children: [
-                  _buildStatItem(
-                      Icons.assignment_rounded,
-                      _totalReports.toString(),
-                      isWorker ? "Assigned" : "Total",
-                      isDark ? Colors.white : const Color(0xFF0D9488),
-                      'assets/stat_total.png'),
-                  _buildStatItem(
-                      Icons.pending_actions_rounded,
-                      _pendingReports.toString(),
-                      isWorker ? "In Process" : "Pending",
-                      isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
-                      'assets/stat_pending.png'),
-                  _buildStatItem(
-                      Icons.task_alt_rounded,
-                      _resolvedReports.toString(),
-                      isWorker ? "In Maint." : "Resolved",
-                      isDark ? const Color(0xFF34D399) : const Color(0xFF059669),
-                      'assets/stat_resolved.png'),
-                ],
+                child: Text(
+                  tr('role_${UserSession.instance.role.toLowerCase()}'),
+                  style: PixelTheme.pixelCaption(fontSize: 11, color: Colors.white),
+                ),
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2.0),
+                ),
+                child: ClipOval(
+                  child: getAvatarImageWidget(username),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isWorker ? tr('home_greeting_worker') : tr('home_greeting_citizen'),
+                      style: PixelTheme.pixelCaption(fontSize: 11, color: Colors.white.withOpacity(0.65)),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      username,
+                      style: PixelTheme.pixelHeading(fontSize: 19, color: Colors.white),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          Row(
+            children: [
+              _buildStatItem(
+                  Icons.assignment_outlined,
+                  _totalReports.toString(),
+                  isWorker ? tr('home_stat_assigned') : tr('home_stat_total'),
+                  PixelTheme.accentOrange,
+                  onTap: () => widget.onStatTap?.call(null)),
+              _buildStatItem(
+                  Icons.pending_actions_outlined,
+                  _pendingReports.toString(),
+                  isWorker ? trStatus(ReportStatus.inProcess) : trStatus(ReportStatus.pending),
+                  PixelTheme.tagYellow,
+                  onTap: () => widget.onStatTap
+                      ?.call(isWorker ? ReportStatus.inProcess : ReportStatus.pending)),
+              _buildStatItem(
+                  Icons.check_circle_outline_rounded,
+                  _resolvedReports.toString(),
+                  isWorker ? tr('home_stat_in_maint') : trStatus(ReportStatus.resolved),
+                  Colors.white,
+                  onTap: () => widget.onStatTap
+                      ?.call(isWorker ? ReportStatus.inMaintenance : ReportStatus.resolved)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionHeading(String text, IconData icon, Color color) {
+    return Row(
+      children: [
+        Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, color: color, size: 16),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          text,
+          style: PixelTheme.pixelHeading(fontSize: 15, color: PixelTheme.textPrimary),
         ),
       ],
     );
   }
 
-  Widget _buildStatItem(IconData icon, String value, String label, Color accentColor, String assetPath) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+  Widget _buildStatItem(IconData icon, String value, String label, Color accentColor, {VoidCallback? onTap}) {
     return Expanded(
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 4),
-        child: SizedBox(
-          width: double.infinity,
-          child: GlassCard(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-            margin: EdgeInsets.zero,
-            borderRadius: BorderRadius.circular(8),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Center(
-                  child: Image.asset(
-                    assetPath,
-                    width: 110,
-                    height: 110,
-                    fit: BoxFit.contain,
-                    color: isDark 
-                        ? Colors.white.withOpacity(0.08) 
-                        : const Color(0xFF1C1917).withOpacity(0.08),
-                    colorBlendMode: BlendMode.srcIn,
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(18),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.14),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Icon(icon, color: accentColor, size: 18),
+                  const SizedBox(height: 8),
+                  Text(
+                    value,
+                    style: PixelTheme.pixelHeading(fontSize: 18, color: Colors.white),
                   ),
-                ),
-                Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: isDark ? Colors.black : const Color(0xFFF5F5F4),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFD6D3D1), width: 1.5),
-                        ),
-                        child: Icon(icon, color: isDark ? Colors.white : const Color(0xFF0D9488), size: 18),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        value,
-                        style: TextStyle(
-                          color: isDark ? Colors.white : const Color(0xFF1C1917),
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        label.toUpperCase(),
-                        style: TextStyle(
-                          color: isDark ? Colors.grey : const Color(0xFF78716C),
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.0,
-                        ),
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                  const SizedBox(height: 4),
+                  Text(
+                    label,
+                    style: PixelTheme.pixelCaption(fontSize: 10, color: Colors.white.withOpacity(0.7)),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -1079,203 +1067,97 @@ class _DashboardContentState extends State<DashboardContent> {
   }
 
   Widget _buildHeroActionCard(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), width: 1.5),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+    return PixelCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: PixelTheme.accentOrange.withOpacity(0.14),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.campaign_outlined, color: PixelTheme.accentOrange, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.black : const Color(0xFFF5F5F4),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFD6D3D1), width: 1.5),
-                      ),
-                      child: Icon(
-                        Icons.auto_awesome,
-                        color: isDark ? Colors.white : const Color(0xFF0D9488),
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
                     Text(
-                      "Empower Your City",
-                      style: TextStyle(
-                        color: isDark ? Colors.white : const Color(0xFF1C1917),
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: -0.5,
-                      ),
+                      tr('home_report_issue_title'),
+                      style: PixelTheme.pixelHeading(fontSize: 15, color: PixelTheme.textPrimary),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      tr('home_report_issue_body'),
+                      style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary),
                     ),
                   ],
                 ),
-                const SizedBox(height: 14),
-                Text(
-                  "Report local issues, track maintenance in real-time, and build a smarter community together.",
-                  style: TextStyle(
-                    color: isDark ? const Color(0xFFCCCCCC) : const Color(0xFF44403C),
-                    fontSize: 13,
-                    height: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    onPressed: () async {
-                      final result = await Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const CitizenReportScreen()),
-                      );
-                      if (result == true) {
-                        _fetchDashboardData();
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isDark ? Colors.white : const Color(0xFF0D9488),
-                      foregroundColor: isDark ? Colors.black : Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    icon: Icon(Icons.add_circle_outline_rounded, color: isDark ? Colors.black : Colors.white),
-                    label: Text(
-                      "Report an Issue",
-                      style: TextStyle(color: isDark ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        Positioned(
-          right: -10,
-          bottom: -10,
-          child: IgnorePointer(
-            child: Opacity(
-              opacity: isDark ? 0.08 : 0.05,
-              child: Icon(
-                Icons.location_city_rounded,
-                size: 130,
-                color: isDark ? Colors.white : const Color(0xFF1C1917),
               ),
-            ),
+            ],
           ),
-        ),
-      ],
+          const SizedBox(height: 18),
+          PixelButton(
+            text: tr('common_file_report'),
+            color: PixelTheme.accentOrange,
+            onPressed: () async {
+              final result = await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CitizenReportScreen()),
+              );
+              if (result == true) {
+                _fetchDashboardData();
+              }
+            },
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildHeroWorkerCard(BuildContext context, int taskCount) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF0F0F0F) : Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFE7E5E4), width: 1.5),
+    return PixelCard(
+      padding: const EdgeInsets.all(20),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: PixelTheme.accentCyan.withOpacity(0.14),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.engineering_outlined, color: PixelTheme.accentCyan, size: 22),
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
+          const SizedBox(width: 14),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.black : const Color(0xFFF5F5F4),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: isDark ? Colors.white24 : const Color(0xFFD6D3D1), width: 1.5),
-                      ),
-                      child: Icon(
-                        Icons.engineering_rounded,
-                        color: isDark ? Colors.white : const Color(0xFF0D9488),
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      "Worker Workspace",
-                      style: TextStyle(
-                        color: isDark ? Colors.white : const Color(0xFF1C1917),
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
                 Text(
-                  taskCount > 0 
-                    ? "You have $taskCount active task(s) assigned. Check recent reports below to update progress or upload proof of completion."
-                    : "No active tasks assigned at the moment. Good work! Tap refresh to fetch new dispatches.",
-                  style: TextStyle(
-                    color: isDark ? const Color(0xFFCCCCCC) : const Color(0xFF44403C),
-                    fontSize: 13,
-                    height: 1.5,
-                  ),
+                  tr('home_worker_workspace_title'),
+                  style: PixelTheme.pixelHeading(fontSize: 15, color: PixelTheme.textPrimary),
                 ),
-                if (taskCount > 0) ...[
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: isDark ? Colors.white : const Color(0xFFDC2626),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        "Requires Maintenance Action",
-                        style: TextStyle(
-                          color: isDark ? Colors.white : const Color(0xFFDC2626),
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                const SizedBox(height: 4),
+                Text(
+                  taskCount > 0
+                      ? trCount('home_worker_workspace_active', taskCount)
+                      : tr('home_worker_workspace_empty'),
+                  style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary),
+                ),
               ],
             ),
           ),
-        ),
-        Positioned(
-          right: -10,
-          bottom: -10,
-          child: IgnorePointer(
-            child: Opacity(
-              opacity: isDark ? 0.08 : 0.05,
-              child: Icon(
-                Icons.engineering_rounded,
-                size: 130,
-                color: isDark ? Colors.white : const Color(0xFF1C1917),
-              ),
-            ),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -1287,125 +1169,140 @@ class _DashboardContentState extends State<DashboardContent> {
     return _buildHeroActionCard(context);
   }
 
+  /// Compact single-line-per-fact report row. Replaces the old six-panel
+  /// stacked card: the whole row is already the tap target, so it no longer
+  /// duplicates that as a full-width "View Full Details" button underneath.
   Widget _buildReportCard(Map<String, dynamic> item) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cat = item['categories'] ?? 'Unknown';
-    final timeAgo = _formatTime(item['timestamp']);
-    final status = item['status'] ?? ReportStatus.pending;
-    final cfg = _getStatusConfig(status);
-    final description = item['description']?.toString().isNotEmpty == true
-        ? item['description']
-        : 'Issue Reported';
-
-    final isLowPriority = status == ReportStatus.resolved || status == ReportStatus.rejected;
-    final priority = (cat.contains('Damage') ||
-            cat.contains('Drainage') ||
-            cat.contains('Tree'))
-        ? (isLowPriority ? 'Low' : 'High')
-        : (isLowPriority ? 'Low' : 'Medium');
-
-    Color priorityColor;
-    if (priority == 'High') {
-      priorityColor = const Color(0xFFEF4444); // Crimson
-    } else if (priority == 'Medium') {
-      priorityColor = const Color(0xFFD97706); // Amber
-    } else {
-      priorityColor = const Color(0xFF059669); // Emerald
-    }
+    final cat = (item['categories'] ?? 'Uncategorized').toString();
+    final status = (item['status'] ?? ReportStatus.pending).toString();
+    final isResolved = status.trim().toLowerCase().contains('resolve');
+    final isRejected = status.trim().toLowerCase().contains('reject');
+    final cfg = getStatusConfig(status);
+    final priority = getReportPriority(cat, status);
+    final location = (item['location'] ?? item['address'] ?? tr('common_location_unknown')).toString();
 
     final int upvotes = item['upvotes'] is int
         ? item['upvotes']
         : (int.tryParse(item['upvotes']?.toString() ?? '0') ?? 0);
 
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ReportDetailScreen(report: item),
-          ),
-        ).then((_) => _fetchDashboardData());
-      },
-      child: GlassCard(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
-        child: Column(
+    // Real AI diagnostics when the backend has actually scanned the report —
+    // never a placeholder value, since a fake match number is worse than none.
+    final String? aiPrediction = (item['ai_prediction'] as String?)?.trim();
+    final double? aiConfidence = double.tryParse((item['confidence'] ?? '').toString().replaceAll('%', ''));
+    final bool hasAiData = aiPrediction != null && aiPrediction.isNotEmpty;
+    final String? aiCaption = hasAiData
+        ? (aiConfidence != null ? '$aiPrediction · ${aiConfidence.toInt()}% ${tr('common_match')}' : aiPrediction)
+        : null;
+
+    final iconColor = isResolved
+        ? PixelTheme.accentGreen
+        : (isRejected ? PixelTheme.alertRed : PixelTheme.accentOrange);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: PixelCard(
+        padding: const EdgeInsets.all(14),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ReportDetailScreen(report: item),
+            ),
+          ).then((_) => _fetchDashboardData());
+        },
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _build3DPin(cat, cfg, upvotes: upvotes),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: iconColor.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(_getCategoryIcon(cat), size: 18, color: iconColor),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              cat,
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 15,
-                                  color: isDark ? Colors.white : const Color(0xFF1C1917)),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Row(
-                            children: [
-                              _buildTag(cfg.label, cfg.color),
-                              const SizedBox(width: 6),
-                              _buildTag(priority, priorityColor),
-                              if (upvotes > 0) ...[
-                                const SizedBox(width: 6),
-                                _buildTag('▲ $upvotes Upvotes', const Color(0xFFEC4899)),
-                              ],
-                            ],
-                          ),
-                        ],
+                      Expanded(
+                        child: Text(
+                          trCategory(cat),
+                          style: PixelTheme.pixelHeading(fontSize: 14, color: PixelTheme.textPrimary),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                      const SizedBox(height: 2),
-                      Text(timeAgo,
-                          style: TextStyle(color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78716C), fontSize: 11, fontWeight: FontWeight.w500)),
+                      const Icon(Icons.chevron_right_rounded, size: 18, color: PixelTheme.textMuted),
                     ],
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              description,
-              style: TextStyle(
-                  color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF44403C), fontSize: 13, height: 1.4),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      PixelBadge(text: trStatus(status), color: cfg.color),
+                      PixelBadge(text: tr('priority_${priority.label}'), color: priority.color),
+                      if (upvotes > 0)
+                        PixelBadge(text: '▲ ${trCount('common_confirmed_count', upvotes)}', color: PixelTheme.accentCyan),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.map_outlined, size: 12, color: PixelTheme.textMuted),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          location,
+                          style: PixelTheme.pixelBody(fontSize: 12, color: PixelTheme.textSecondary),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.access_time_rounded, size: 11, color: PixelTheme.textMuted),
+                      const SizedBox(width: 5),
+                      Text(
+                        _formatTime(item['timestamp']?.toString()),
+                        style: PixelTheme.pixelCaption(fontSize: 11, color: PixelTheme.textMuted),
+                      ),
+                    ],
+                  ),
+                  // AI caption gets its own line — sharing a row with the
+                  // timestamp left it truncating mid-percentage on most
+                  // screen widths.
+                  if (aiCaption != null) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(Icons.auto_awesome, size: 11, color: PixelTheme.accentPurple),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            aiCaption,
+                            style: PixelTheme.pixelCaption(fontSize: 11, color: PixelTheme.accentPurple),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTag(String text, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.2), width: 1.0),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          color: color,
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
         ),
       ),
     );
@@ -1418,10 +1315,12 @@ class _DashboardContentState extends State<DashboardContent> {
       final sorted = _categories.entries.toList()
         ..sort((a, b) => b.value.compareTo(a.value));
       final top = sorted.take(3).toList();
+      // Three genuinely distinguishable hues — accentYellow (amber) sits too
+      // close to accentOrange to tell apart at a glance in a thin bar.
       final colors = [
-        const Color(0xFFEF4444), // Crimson Red
-        const Color(0xFFF59E0B), // Amber Orange
-        const Color(0xFF06B6D4), // Cyan
+        PixelTheme.accentOrange,
+        PixelTheme.accentGreen,
+        PixelTheme.accentCyan,
       ];
 
       for (int i = 0; i < top.length; i++) {
@@ -1430,31 +1329,24 @@ class _DashboardContentState extends State<DashboardContent> {
       }
     } else {
       lines.add(
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
           child: Center(
             child: Text(
-              "No data available.",
-              style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
+              tr('home_no_data'),
+              style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textMuted),
             ),
           ),
         ),
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return GlassCard(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "City Issue Overview",
-            style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-                color: isDark ? Colors.white : const Color(0xFF1C1917)),
-          ),
+          _buildSectionHeading(tr('home_issue_overview'), Icons.bar_chart_rounded, PixelTheme.accentOrange),
           const SizedBox(height: 20),
           ...lines,
         ],
@@ -1463,7 +1355,6 @@ class _DashboardContentState extends State<DashboardContent> {
   }
 
   Widget _buildProgressLine(String label, double val, Color col) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -1474,23 +1365,17 @@ class _DashboardContentState extends State<DashboardContent> {
               Icon(
                 _getCategoryIcon(label),
                 size: 16,
-                color: isDark ? Colors.white : const Color(0xFF1C1917),
+                color: PixelTheme.textPrimary,
               ),
               const SizedBox(width: 8),
               Text(
-                label,
-                style: TextStyle(
-                    fontSize: 13,
-                    color: isDark ? Colors.white : const Color(0xFF1C1917),
-                    fontWeight: FontWeight.w600),
+                trCategory(label),
+                style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary, fontWeight: FontWeight.w600),
               ),
               const Spacer(),
               Text(
                 "${(val * 100).toInt()}%",
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    color: isDark ? Colors.white : const Color(0xFF1C1917)),
+                style: PixelTheme.pixelBody(fontSize: 15, color: PixelTheme.textPrimary, fontWeight: FontWeight.bold),
               ),
             ],
           ),
@@ -1501,7 +1386,7 @@ class _DashboardContentState extends State<DashboardContent> {
               children: [
                 Container(
                   height: 6,
-                  color: isDark ? Colors.white12 : const Color(0xFFE7E5E4),
+                  color: PixelTheme.bgInput,
                 ),
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 600),
@@ -1513,7 +1398,7 @@ class _DashboardContentState extends State<DashboardContent> {
                     alignment: Alignment.centerLeft,
                     child: Container(
                       decoration: BoxDecoration(
-                        color: isDark ? Colors.white : col,
+                        color: col,
                         borderRadius: BorderRadius.circular(4),
                       ),
                     ),
@@ -1526,19 +1411,6 @@ class _DashboardContentState extends State<DashboardContent> {
       ),
     );
   }
-}
-
-class _StatusConfig {
-  final Color    color;
-  final Color    bg;
-  final IconData icon;
-  final String   label;
-  const _StatusConfig({
-    required this.color,
-    required this.bg,
-    required this.icon,
-    required this.label,
-  });
 }
 
 class SmoothIndexedStack extends StatefulWidget {
