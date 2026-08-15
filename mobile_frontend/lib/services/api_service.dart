@@ -73,10 +73,13 @@ class ApiService {
   /// [username] – worker's login name; required when role='worker'.
   /// [limit]    – max number of results (default 50, server caps at 200).
   /// [offset]   – skip this many results for pagination.
+  /// [scope]    – worker only: 'mine' (claimed by me), 'pool' (unclaimed team
+  ///              pool) or 'team' (both, the default).
   static Future<http.Response> getReports({
     int? userId,
     String? role,
     String? username,
+    String? scope,
     int limit = 50,
     int offset = 0,
   }) {
@@ -84,10 +87,60 @@ class ApiService {
       if (userId   != null) 'user_id':  userId.toString(),
       if (role     != null) 'role':     role,
       if (username != null) 'username': username,
+      if (scope    != null) 'scope':    scope,
       'limit':  limit.toString(),
       'offset': offset.toString(),
     });
     return http.get(uri, headers: _authHeaders).timeout(const Duration(seconds: 10));
+  }
+
+  // ── Team pool ───────────────────────────────────────────────────────────
+  // Work is dispatched to a team, sits in that team's shared pool, and the
+  // first worker to claim it owns it.
+
+  /// Unclaimed jobs in the caller's team pool.
+  static Future<http.Response> getTeamPool({int limit = 50}) {
+    return getReports(role: 'worker', scope: 'pool', limit: limit);
+  }
+
+  /// Claim a job from the team pool.
+  ///
+  /// A **409** means another worker claimed it first — callers should refresh
+  /// the pool and tell the user, not retry.
+  static Future<http.Response> claimTask(int reportId) {
+    return http.post(
+      Uri.parse('$baseUrl/reports/$reportId/claim'),
+      headers: _authHeaders,
+    ).timeout(const Duration(seconds: 10));
+  }
+
+  /// Hand a claimed job back to the team pool.
+  static Future<http.Response> releaseTask(int reportId, {String reason = ''}) {
+    return http.post(
+      Uri.parse('$baseUrl/reports/$reportId/release'),
+      headers: {..._authHeaders, 'Content-Type': 'application/json'},
+      body: jsonEncode({'reason': reason}),
+    ).timeout(const Duration(seconds: 10));
+  }
+
+  /// Ask an authority to move this job to another team.
+  static Future<http.Response> requestTransfer(int reportId, {String reason = ''}) {
+    return http.post(
+      Uri.parse('$baseUrl/reports/$reportId/transfer-request'),
+      headers: {..._authHeaders, 'Content-Type': 'application/json'},
+      body: jsonEncode({'to_agency_id': null, 'reason': reason}),
+    ).timeout(const Duration(seconds: 10));
+  }
+
+  /// Pull the server's error text so the UI can explain a refusal precisely.
+  static String errorDetail(http.Response res, String fallback) {
+    try {
+      final body = jsonDecode(res.body);
+      if (body is Map && body['detail'] is String) return body['detail'] as String;
+    } catch (_) {
+      // Non-JSON error body — fall through.
+    }
+    return fallback;
   }
 
   // ── AI Prediction ────────────────────────────────────────────────────────

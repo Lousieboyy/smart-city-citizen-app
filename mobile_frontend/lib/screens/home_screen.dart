@@ -19,6 +19,7 @@ import '../theme_manager.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/background_decorator.dart';
 import '../pixel_theme.dart';
+import '../widgets/nav_icons.dart';
 import '../widgets/pixel_widgets.dart';
 import '../localization/app_strings.dart';
 import '../localization/locale_manager.dart';
@@ -41,8 +42,14 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _pendingHistoryFilter;
 
   List<Widget> get _widgetOptions => [
-        DashboardContent(onStatTap: _goToHistory),
-        const MapViewScreen(),
+        DashboardContent(
+          onStatTap: _goToHistory,
+          onProfileTap: () => _onItemTapped(3),
+        ),
+        // Not const, for the same reason as `home:` in main.dart — a const
+        // instance is identical across rebuilds, so this tab would keep the old
+        // language after a locale switch.
+        MapViewScreen(),
         HistoryScreen(initialStatusFilter: _pendingHistoryFilter),
         ProfileScreen(onViewReportsTap: () => _goToHistory(null)),
       ];
@@ -83,12 +90,12 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Widget _buildTabIcon(IconData icon, bool isActive, Color activeColor, {bool showBadge = false}) {
+  Widget _buildTabIcon(NavIconType icon, bool isActive, Color activeColor, {bool showBadge = false}) {
     final inactiveColor = const Color(0xFFB7B3AC);
     final color = isActive ? activeColor : inactiveColor;
 
     return TweenAnimationBuilder<double>(
-      key: ValueKey("${icon.codePoint}_${isActive}"),
+      key: ValueKey("${icon.name}_$isActive"),
       tween: Tween<double>(begin: isActive ? 1.0 : 1.1, end: isActive ? 1.1 : 1.0),
       duration: const Duration(milliseconds: 250),
       curve: Curves.easeOutBack,
@@ -99,7 +106,7 @@ class _HomeScreenState extends State<HomeScreen> {
             clipBehavior: Clip.none,
             alignment: Alignment.center,
             children: [
-              Icon(icon, color: color, size: 24),
+              NavIcon(type: icon, color: color, size: 24),
               if (showBadge)
                 Positioned(
                   top: -2,
@@ -121,15 +128,15 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildActiveTabIcon(IconData icon, Color activeColor, {bool showBadge = false}) {
+  Widget _buildActiveTabIcon(NavIconType icon, Color activeColor, {bool showBadge = false}) {
     return _buildTabIcon(icon, true, activeColor, showBadge: showBadge);
   }
 
-  Widget _buildInactiveTabIcon(IconData icon, {bool showBadge = false}) {
+  Widget _buildInactiveTabIcon(NavIconType icon, {bool showBadge = false}) {
     return _buildTabIcon(icon, false, PixelTheme.primaryGreen, showBadge: showBadge);
   }
 
-  Widget _navItem(int index, IconData icon, String label, {bool showBadge = false}) {
+  Widget _navItem(int index, NavIconType icon, String label, {bool showBadge = false}) {
     final isActive = _selectedIndex == index;
     return Expanded(
       child: InkWell(
@@ -198,17 +205,20 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     child: Row(
                       children: [
-                        _navItem(0, Icons.home_rounded, tr('nav_home')),
-                        _navItem(1, Icons.map_rounded, tr('nav_map')),
+                        _navItem(0, NavIconType.home, tr('nav_home')),
+                        _navItem(1, NavIconType.map, tr('nav_map')),
                         const SizedBox(width: 64),
-                        _navItem(2, Icons.history_rounded, tr('nav_history'), showBadge: _hasUnreadNotification),
-                        _navItem(3, Icons.person_rounded, tr('nav_profile')),
+                        _navItem(2, NavIconType.history, tr('nav_history'), showBadge: _hasUnreadNotification),
+                        _navItem(3, NavIconType.profile, tr('nav_profile')),
                       ],
                     ),
                   ),
                 ),
                 Positioned(
-                  bottom: 42,
+                  // Sits 8px lower than the nav bar's top edge (72) rather than
+                  // centred on it, so the button reads as resting in the bar
+                  // instead of floating off it.
+                  bottom: 34,
                   child: GestureDetector(
                     onTap: () async {
                       final result = await Navigator.push(
@@ -253,7 +263,11 @@ class DashboardContent extends StatefulWidget {
   /// tapped, so Home can switch to History pre-filtered.
   final ValueChanged<String?>? onStatTap;
 
-  const DashboardContent({super.key, this.onStatTap});
+  /// Called when the header avatar is tapped. Switches to the Profile tab
+  /// rather than pushing a second copy of the screen on top of the nav bar.
+  final VoidCallback? onProfileTap;
+
+  const DashboardContent({super.key, this.onStatTap, this.onProfileTap});
 
   @override
   State<DashboardContent> createState() => _DashboardContentState();
@@ -270,6 +284,8 @@ class _DashboardContentState extends State<DashboardContent> {
   List<dynamic>    _recentReports = [];
   List<dynamic>    _workerTasksToDo = [];
   List<dynamic>    _workerTasksSubmitted = [];
+  List<dynamic>    _workerTeamPool = [];
+  int?             _claimingId;
 
   // ── Notification banner state ──────────────────────────────────────────
   StreamSubscription<StatusChange>? _notifSub;
@@ -325,11 +341,14 @@ class _DashboardContentState extends State<DashboardContent> {
 
     try {
       if (isWorker) {
-        // Fetch worker's personal reports to compute assigned task counts
+        // Jobs this worker has claimed. The unclaimed team pool is fetched
+        // separately so the two lists can be shown as distinct sections.
         final workerResponse = await ApiService.getReports(
           role: session.role,
           username: session.username,
+          scope: 'mine',
         );
+        final poolResponse = await ApiService.getTeamPool();
         // Fetch global stats and reports for overview and recent list (open to all users)
         final statsResponse   = await ApiService.getStats();
         final reportsResponse = await ApiService.getReports();
@@ -348,12 +367,19 @@ class _DashboardContentState extends State<DashboardContent> {
             return tb.compareTo(ta);
           });
 
+          // The pool is a soft dependency: if it fails the worker should still
+          // see their own tasks rather than an error screen.
+          final poolReports = poolResponse.statusCode == 200
+              ? jsonDecode(poolResponse.body) as List
+              : <dynamic>[];
+
           setState(() {
             _totalReports    = workerReports.length;
             _pendingReports  = workerReports.where((r) => r['status'] == 'In Process').length;
             _resolvedReports = workerReports.where((r) => r['status'] == 'In Maintenance').length;
             _categories      = Map<String, int>.from(statsData['categories'] ?? {});
             _recentReports   = reportsData.take(3).toList();
+            _workerTeamPool  = poolReports;
             _workerTasksToDo = workerReports.where((r) => r['worker_completed'] != 1).toList();
             _workerTasksSubmitted = workerReports.where((r) => r['worker_completed'] == 1).toList();
             _isLoading       = false;
@@ -652,6 +678,39 @@ class _DashboardContentState extends State<DashboardContent> {
                   const SizedBox(height: 24),
                   
                   if (isWorker) ...[
+                    // ── TEAM POOL: unclaimed work anyone on the team can take ──
+                    if (_workerTeamPool.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: _buildSectionHeading(
+                          tr('home_worker_team_pool'),
+                          Icons.groups_2_outlined,
+                          PixelTheme.accentCyan,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Text(
+                          tr('home_worker_team_pool_hint'),
+                          style: PixelTheme.pixelBody(
+                            fontSize: 11,
+                            color: PixelTheme.textSecondary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        itemCount: _workerTeamPool.length,
+                        itemBuilder: (context, index) =>
+                            _buildPoolCard(_workerTeamPool[index]),
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+
                     // ── WORKER ACTIVE TASKS TO-DO ──
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -900,6 +959,59 @@ class _DashboardContentState extends State<DashboardContent> {
     return "$dayName, $monthName ${now.day}, ${now.year}";
   }
 
+  /// EN / BM switch.
+  ///
+  /// Shows both options with the active one highlighted rather than a single
+  /// label that flips, so the language can be changed without first tapping to
+  /// find out what the control does. Writes through LocaleManager, which
+  /// persists the choice and rebuilds the tree, so this stays in step with the
+  /// same setting in Profile.
+  Widget _buildLanguageToggle() {
+    return ValueListenableBuilder<String>(
+      valueListenable: LocaleManager.localeNotifier,
+      builder: (context, locale, _) {
+        Widget segment(String code, String label) {
+          final isActive = locale == code;
+          return GestureDetector(
+            onTap: isActive ? null : () => LocaleManager.toggleLocale(),
+            behavior: HitTestBehavior.opaque,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: isActive ? Colors.white : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                label,
+                style: PixelTheme.pixelCaption(
+                  fontSize: 11,
+                  color: isActive ? PixelTheme.primaryGreen : Colors.white.withOpacity(0.75),
+                ),
+              ),
+            ),
+          );
+        }
+
+        return Container(
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.16),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              segment('en', tr('lang_short_en')),
+              segment('bm', tr('lang_short_bm')),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildHeader(BuildContext context) {
     final username = UserSession.instance.username;
     final isWorker = UserSession.instance.role.toLowerCase().contains('worker');
@@ -919,35 +1031,43 @@ class _DashboardContentState extends State<DashboardContent> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                _getFormattedDate(),
-                style: PixelTheme.pixelCaption(fontSize: 12, color: Colors.white.withOpacity(0.7)),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.16),
-                  borderRadius: BorderRadius.circular(20),
-                ),
+              // Flexible so a long localised date can't push the toggle off a
+              // narrow screen — the switch is wider than the badge that used to
+              // sit here.
+              Flexible(
                 child: Text(
-                  tr('role_${UserSession.instance.role.toLowerCase()}'),
-                  style: PixelTheme.pixelCaption(fontSize: 11, color: Colors.white),
+                  _getFormattedDate(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: PixelTheme.pixelCaption(fontSize: 12, color: Colors.white.withOpacity(0.7)),
                 ),
               ),
+              const SizedBox(width: 8),
+              _buildLanguageToggle(),
             ],
           ),
           const SizedBox(height: 16),
           Row(
             children: [
-              Container(
-                width: 50,
-                height: 50,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2.0),
-                ),
-                child: ClipOval(
-                  child: getAvatarImageWidget(username),
+              // Tapping the avatar is the shortcut most users reach for first,
+              // so it opens the Profile tab.
+              InkWell(
+                onTap: () => widget.onProfileTap?.call(),
+                customBorder: const CircleBorder(),
+                child: Semantics(
+                  button: true,
+                  label: tr('home_open_profile'),
+                  child: Container(
+                    width: 50,
+                    height: 50,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2.0),
+                    ),
+                    child: ClipOval(
+                      child: getAvatarImageWidget(username),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 14),
@@ -969,21 +1089,39 @@ class _DashboardContentState extends State<DashboardContent> {
                   ],
                 ),
               ),
+              const SizedBox(width: 12),
+              // Role badge sits on the avatar row so it reads as a label for the
+              // person, rather than floating up beside the date.
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.16),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  tr('role_${UserSession.instance.role.toLowerCase()}'),
+                  style: PixelTheme.pixelCaption(fontSize: 11, color: Colors.white),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 22),
           Row(
             children: [
+              // For a worker the first tile is the team pool — the work they
+              // could pick up — rather than a total that hides it.
               _buildStatItem(
-                  Icons.assignment_outlined,
-                  _totalReports.toString(),
-                  isWorker ? tr('home_stat_assigned') : tr('home_stat_total'),
-                  PixelTheme.accentOrange,
+                  isWorker ? Icons.groups_2_outlined : Icons.assignment_outlined,
+                  isWorker
+                      ? _workerTeamPool.length.toString()
+                      : _totalReports.toString(),
+                  isWorker ? tr('home_stat_pool') : tr('home_stat_total'),
+                  PixelTheme.accentCyan,
                   onTap: () => widget.onStatTap?.call(null)),
               _buildStatItem(
                   Icons.pending_actions_outlined,
-                  _pendingReports.toString(),
-                  isWorker ? trStatus(ReportStatus.inProcess) : trStatus(ReportStatus.pending),
+                  isWorker ? _totalReports.toString() : _pendingReports.toString(),
+                  isWorker ? tr('home_stat_mine') : trStatus(ReportStatus.pending),
                   PixelTheme.tagYellow,
                   onTap: () => widget.onStatTap
                       ?.call(isWorker ? ReportStatus.inProcess : ReportStatus.pending)),
@@ -1172,6 +1310,156 @@ class _DashboardContentState extends State<DashboardContent> {
   /// Compact single-line-per-fact report row. Replaces the old six-panel
   /// stacked card: the whole row is already the tap target, so it no longer
   /// duplicates that as a full-width "View Full Details" button underneath.
+  /// Claim a job from the team pool.
+  ///
+  /// The server settles races, so a 409 here is expected rather than
+  /// exceptional: another worker got there first and we just refresh.
+  Future<void> _claimPoolTask(Map<String, dynamic> item) async {
+    final id = item['id'] as int?;
+    if (id == null || _claimingId != null) return;
+
+    setState(() => _claimingId = id);
+    try {
+      final res = await ApiService.claimTask(id);
+      if (!mounted) return;
+
+      if (res.statusCode == 200) {
+        _showSnack(tr('worker_claim_success'), PixelTheme.accentGreen);
+      } else if (res.statusCode == 409) {
+        _showSnack(tr('worker_claim_taken'), PixelTheme.accentOrange);
+      } else {
+        _showSnack(
+          ApiService.errorDetail(res, tr('worker_claim_failed')),
+          PixelTheme.alertRed,
+        );
+      }
+    } catch (_) {
+      if (mounted) _showSnack(tr('worker_claim_failed'), PixelTheme.alertRed);
+    } finally {
+      if (mounted) setState(() => _claimingId = null);
+      await _fetchDashboardData();
+    }
+  }
+
+  void _showSnack(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: PixelTheme.pixelBody(fontSize: 12)),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  /// An unclaimed job in the team pool, with an Accept button.
+  Widget _buildPoolCard(Map<String, dynamic> item) {
+    final cat = (item['categories'] ?? 'Uncategorized').toString();
+    final location =
+        (item['location'] ?? item['address'] ?? tr('common_location_unknown')).toString();
+    final id = item['id'] as int?;
+    final busy = _claimingId == id;
+    final releaseCount = item['release_count'] is int ? item['release_count'] as int : 0;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: PixelCard(
+        padding: const EdgeInsets.all(14),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => ReportDetailScreen(report: item)),
+          ).then((_) => _fetchDashboardData());
+        },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: PixelTheme.accentCyan.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.inbox_rounded,
+                      color: PixelTheme.accentCyan, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        cat,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: PixelTheme.pixelBody(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        location,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: PixelTheme.pixelBody(
+                          fontSize: 11,
+                          color: PixelTheme.textSecondary,
+                        ),
+                      ),
+                      if (releaseCount > 0) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          trCount('worker_pool_released', releaseCount),
+                          style: PixelTheme.pixelBody(
+                            fontSize: 10,
+                            color: PixelTheme.accentOrange,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: busy ? null : () => _claimPoolTask(item),
+                icon: busy
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.handshake_outlined, size: 16),
+                label: Text(
+                  busy ? tr('worker_claiming') : tr('worker_accept_task'),
+                  style: PixelTheme.pixelBody(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: PixelTheme.accentCyan,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildReportCard(Map<String, dynamic> item) {
     final cat = (item['categories'] ?? 'Uncategorized').toString();
     final status = (item['status'] ?? ReportStatus.pending).toString();

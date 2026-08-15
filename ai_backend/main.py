@@ -53,9 +53,9 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     Boolean, Column, DateTime, Float, ForeignKey,
-    Integer, String, Text, create_engine, func, text, or_,
+    Integer, String, Text, and_, create_engine, false, func, text, or_,
 )
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
 # TensorFlow is completely removed to prevent AVX instruction set crashes on cloud CPUs.
 # We use lightweight tflite-runtime instead.
@@ -218,6 +218,19 @@ class DBComplaint(Base):
     forwarded_at = Column(String(64), nullable=True)
     reviewed_at = Column(String(64), nullable=True)
     assigned_worker = Column(String(128), nullable=True)
+
+    # Team dispatch. The report is owned by a *team* (Agency); assigned_worker_id
+    # stays NULL while it sits in that team's shared pool, and is set by the first
+    # worker to claim it. assigned_worker (the string above) is kept in sync purely
+    # so older clients that read it keep working — the FK is the source of truth.
+    assigned_agency_id = Column(Integer, ForeignKey("Agency.agencyID"), nullable=True)
+    assigned_worker_id = Column(Integer, ForeignKey("Staff.staffID"), nullable=True)
+    dispatched_at = Column(String(64), nullable=True)   # entered the pool — ageing/SLA clock
+    claimed_at = Column(String(64), nullable=True)      # left the pool
+    release_count = Column(Integer, default=0)          # times bounced back; bottleneck signal
+
+    assigned_agency = relationship("DBAgency", lazy="joined")
+
     in_process_at = Column(String(64), nullable=True)
     in_maintenance_at = Column(String(64), nullable=True)
     completion_image_path = Column(String(512), nullable=True)
@@ -281,6 +294,28 @@ class DBAuthorityAction(Base):
     categoryID = Column(Integer, ForeignKey("Category.categoryID"), nullable=True)
 
 
+class DBTransferRequest(Base):
+    """A team asking for a report to be taken off its hands.
+
+    Raised by a worker or an authority when a team is overloaded or the job is
+    outside what it can do. An authority (of either team) or an admin decides.
+    to_agency_id may be NULL, meaning "somebody please take this" — the approver
+    then picks the destination.
+    """
+    __tablename__ = "TransferRequest"
+    id = Column(Integer, primary_key=True, index=True)
+    complaintID = Column(Integer, ForeignKey("Complaint.complaintID"), nullable=False, index=True)
+    from_agency_id = Column(Integer, ForeignKey("Agency.agencyID"), nullable=True)
+    to_agency_id = Column(Integer, ForeignKey("Agency.agencyID"), nullable=True)
+    requested_by_staff_id = Column(Integer, ForeignKey("Staff.staffID"), nullable=True)
+    reason = Column(String(1000), nullable=True)
+    status = Column(String(16), default="pending", index=True)  # pending | approved | denied
+    decided_by_staff_id = Column(Integer, ForeignKey("Staff.staffID"), nullable=True)
+    decided_at = Column(String(64), nullable=True)
+    decision_note = Column(String(1000), nullable=True)
+    created_at = Column(String(64), nullable=True)
+
+
 class DBReportUpvote(Base):
     __tablename__ = "report_upvotes"
     user_id = Column("user_id", Integer, ForeignKey("User.userID"), primary_key=True)
@@ -322,6 +357,12 @@ def _add_missing_columns():
             ("authenticity_score", "INTEGER"),
             ("authenticity_verdict", "VARCHAR(32)"),
             ("authenticity_signals", "VARCHAR(4000)"),
+            # Team dispatch / shared pool
+            ("assigned_agency_id", "INTEGER"),
+            ("assigned_worker_id", "INTEGER"),
+            ("dispatched_at", "VARCHAR(64)"),
+            ("claimed_at", "VARCHAR(64)"),
+            ("release_count", "INTEGER DEFAULT 0"),
         ],
         "DatasetSample": [
             ("pending_blob", "TEXT"),
@@ -610,16 +651,93 @@ input_details = None
 output_details = None
 
 
+def _backfill_team_assignment():
+    """One-time backfill of the team-dispatch FKs for pre-existing reports.
+
+    Before team dispatch existed, ownership lived in two free-text fields:
+    assigned_department (a department name) and assigned_worker (a typed-in
+    worker name). Resolve both into real foreign keys so old reports show up in
+    the right team pool instead of vanishing from every scoped query.
+
+    Runs on every boot but only touches rows whose FK is still NULL, so it is
+    idempotent and costs nothing once the data is converted.
+    """
+    db = SessionLocal()
+    try:
+        pending = (
+            db.query(DBComplaint)
+            .filter(DBComplaint.assigned_agency_id.is_(None))
+            .filter(
+                or_(
+                    DBComplaint.assigned_department.isnot(None),
+                    DBComplaint.assigned_worker.isnot(None),
+                )
+            )
+            .all()
+        )
+        if not pending:
+            return
+
+        agencies = db.query(DBAgency).all()
+        staff_by_name = {s.username.lower(): s for s in db.query(DBStaff).all()}
+        agency_filled = worker_filled = 0
+
+        for report in pending:
+            # assigned_department is free text ("Majlis Bandaraya Melaka Bersejarah",
+            # "MBMB", ...) so match it through DEPT_MAP's known aliases.
+            dept = (report.assigned_department or "").lower()
+            if dept:
+                for agency in agencies:
+                    aliases = DEPT_MAP.get(agency.name.upper(), [agency.name])
+                    if any(alias.lower() in dept for alias in aliases):
+                        report.assigned_agency_id = agency.agencyID
+                        agency_filled += 1
+                        break
+
+            worker = staff_by_name.get((report.assigned_worker or "").lower())
+            if worker:
+                report.assigned_worker_id = worker.id
+                report.claimed_at = report.claimed_at or report.in_process_at
+                worker_filled += 1
+                # A named worker implies their agency owns it, even if the
+                # department text was blank or unrecognised.
+                if report.assigned_agency_id is None and worker.agencyID:
+                    report.assigned_agency_id = worker.agencyID
+                    agency_filled += 1
+
+            if report.assigned_agency_id is not None and not report.dispatched_at:
+                report.dispatched_at = report.in_process_at or report.reviewed_at
+            if report.release_count is None:
+                report.release_count = 0
+
+        db.commit()
+        print(
+            f"[DB] Team backfill: {agency_filled} report(s) linked to a team, "
+            f"{worker_filled} linked to a worker."
+        )
+    except Exception as e:
+        db.rollback()
+        print(f"[DB] Team backfill skipped: {e}")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def startup_event():
     global model, base_grad_model, nude_detector, class_names, interpreter, input_details, output_details
-    
+
     # 1. Seed database safely
     try:
         seed_database()
     except Exception as e:
         print(f"[Startup Warning] Seed database failed: {e}")
-    
+
+    # 1b. Convert legacy free-text assignment into team/worker foreign keys.
+    try:
+        _backfill_team_assignment()
+    except Exception as e:
+        print(f"[Startup Warning] Team backfill failed: {e}")
+
     # 2. Load TFLite model safely
     try:
         if MODEL_PATH.exists() and LABELS_PATH.exists():
@@ -916,6 +1034,14 @@ def _serialize(r: DBComplaint) -> dict:
         "forwarded_at":             r.forwarded_at,
         "reviewed_at":              r.reviewed_at,
         "assigned_worker":          r.assigned_worker,
+        "assigned_agency_id":       r.assigned_agency_id,
+        "assigned_team":            r.assigned_agency.name if r.assigned_agency else None,
+        "assigned_worker_id":       r.assigned_worker_id,
+        # NULL worker means the report is still sitting in the team's shared pool.
+        "in_pool":                  r.assigned_agency_id is not None and r.assigned_worker_id is None,
+        "dispatched_at":            r.dispatched_at,
+        "claimed_at":               r.claimed_at,
+        "release_count":            r.release_count or 0,
         "in_process_at":            r.in_process_at,
         "in_maintenance_at":        r.in_maintenance_at,
         "completion_image_path":    r.completion_image_path,
@@ -1246,6 +1372,7 @@ def get_reports(
     user_id: Optional[int] = None,
     role: Optional[str] = None,
     username: Optional[str] = None,
+    scope: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -1254,58 +1381,61 @@ def get_reports(
     """
     Return reports filtered by role with pagination.
       citizen          → only their own reports
-      worker           → only reports assigned to *them* (by username)
+      worker           → jobs they have claimed + their team's unclaimed pool
+      authority        → everything owned by their team
       admin / None     → all reports
-    FIX B-5:   Workers see only reports where assigned_worker == username.
-    FIX PAG:   limit/offset pagination — default limit=50.
-    FIX JWT:   Requires Authorization: Bearer <token>.
+
+    Scoping keys off Staff.agencyID and Complaint.assigned_agency_id rather than
+    fuzzy-matching department text against the caller's username, which silently
+    mis-scoped anyone whose username did not happen to contain their agency name.
+
+    `scope` narrows a worker's view so the client can render the two lists
+    separately without re-filtering:
+      mine → claimed by me    pool → unclaimed team pool    team → both (default)
     """
     query = db.query(DBComplaint)
 
     # Secure role/username check from the JWT token
     token_role = _token.get("role") or ""
     token_username = _token.get("username") or ""
+    scope = (scope or "team").lower()
+
+    staff = None
+    if token_role in ("worker", "authority", "admin") or token_role.startswith("authority_"):
+        try:
+            staff = db.query(DBStaff).filter(DBStaff.id == int(_token["sub"])).first()
+        except (KeyError, TypeError, ValueError):
+            staff = None
 
     if token_role == "citizen" or (user_id is not None and token_role not in ("worker", "admin") and not token_role.startswith("authority") and token_role != "authority"):
         if user_id is not None:
             query = query.filter(DBComplaint.user_id == user_id)
-    elif token_role == "worker" and token_username:
-        staff_id = int(_token["sub"])
-        staff = db.query(DBStaff).filter(DBStaff.id == staff_id).first()
-        dept_suffix = ""
-        if staff and staff.agencyID:
-            agency = db.query(DBAgency).filter(DBAgency.agencyID == staff.agencyID).first()
-            if agency:
-                dept_suffix = agency.name
-        
-        conds = [DBComplaint.assigned_worker.ilike(token_username)]
-        if dept_suffix:
-            terms = DEPT_MAP.get(dept_suffix.upper(), [dept_suffix])
-            for term in terms:
-                conds.append(DBComplaint.assigned_department.ilike(f"%{term}%"))
-                
-        query = query.filter(
-            or_(*conds),
-            DBComplaint.status.in_(["In Process", "In Maintenance"]),
-        )
-    elif token_role == "authority" or token_role.startswith("authority_"):
-        dept_suffix = ""
-        if "_" in token_role:
-            dept_suffix = token_role.split("_")[1].upper()
+    elif token_role == "worker":
+        my_id = staff.id if staff else -1
+        my_agency = staff.agencyID if staff else None
+
+        mine = DBComplaint.assigned_worker_id == my_id
+        pool = and_(
+            DBComplaint.assigned_agency_id == my_agency,
+            DBComplaint.assigned_worker_id.is_(None),
+        ) if my_agency else false()
+
+        if scope == "mine":
+            query = query.filter(mine)
+        elif scope == "pool":
+            query = query.filter(pool)
         else:
-            username_lower = token_username.lower()
-            if "mbmb" in username_lower:
-                dept_suffix = "MBMB"
-            elif "jkr" in username_lower:
-                dept_suffix = "JKR"
-            elif "swcorp" in username_lower:
-                dept_suffix = "SWCorp"
-            elif "mphtj" in username_lower:
-                dept_suffix = "MPHTJ"
-        if dept_suffix:
-            terms = DEPT_MAP.get(dept_suffix, [dept_suffix])
-            conds = [DBComplaint.assigned_department.ilike(f"%{term}%") for term in terms]
-            query = query.filter(or_(*conds))
+            query = query.filter(or_(mine, pool))
+
+        query = query.filter(DBComplaint.status.in_(["In Process", "In Maintenance"]))
+    elif token_role == "authority" or token_role.startswith("authority_"):
+        my_agency = staff.agencyID if staff else None
+        if my_agency:
+            # Their own team's work, plus anything still awaiting dispatch that
+            # is routed to them by category (assigned_agency_id set at review).
+            query = query.filter(DBComplaint.assigned_agency_id == my_agency)
+            if scope == "pool":
+                query = query.filter(DBComplaint.assigned_worker_id.is_(None))
 
     reports = (
         query
@@ -1563,12 +1693,17 @@ async def create_report(
         # (This replaces any hardcoded routing logic)
         cat_record = db.query(DBCategory).filter(DBCategory.name == categories).first()
         assigned_dept = None
+        assigned_agency_id = None
         if cat_record and cat_record.agencyID:
             agency = db.query(DBAgency).filter(DBAgency.agencyID == cat_record.agencyID).first()
             if agency:
                 assigned_dept = agency.name
+                # Route to the owning team up front so that team's authority sees
+                # it in their queue as soon as the admin approves it.
+                assigned_agency_id = agency.agencyID
 
         new_report = DBComplaint(
+            assigned_agency_id=assigned_agency_id,
             user_id=user_id,
             description=description,
             title=categories,
@@ -1696,6 +1831,11 @@ def admin_review(
     now = datetime.now(timezone.utc).isoformat()
     report.status = "In Review"
     report.assigned_department = req.department
+    # Resolve the department name to the owning team so the right authority
+    # picks it up; falls back to whatever routing create_report already set.
+    resolved = _resolve_agency(db, req.department)
+    if resolved:
+        report.assigned_agency_id = resolved.agencyID
     report.reviewed_at = now
     report.forwarded_at = now  # kept for backward compatibility
     if req.note:
@@ -1766,7 +1906,220 @@ def admin_reject(
     return _serialize(report)
 
 
-# STEP 2 → Authority assigns worker: In Review → In Process
+# ─────────────────────────────────────────────────────────────
+#  TEAM DISPATCH HELPERS
+#
+#  A "team" is an Agency. A report is dispatched to a team, sits in that team's
+#  shared pool (assigned_worker_id IS NULL), and the first member to claim it
+#  owns it. Statuses are unchanged — pool vs claimed is expressed by the FK.
+# ─────────────────────────────────────────────────────────────
+SLA_HOURS = int(os.getenv("DISPATCH_SLA_HOURS", "48"))
+
+
+def _current_staff(db: Session, token: dict) -> DBStaff:
+    """Resolve the caller to a Staff row, or 403 if they are not staff."""
+    try:
+        staff = db.query(DBStaff).filter(DBStaff.id == int(token["sub"])).first()
+    except (KeyError, TypeError, ValueError):
+        staff = None
+    if not staff:
+        raise HTTPException(status_code=403, detail="This action requires a staff account.")
+    return staff
+
+
+def _resolve_agency(db: Session, name: Optional[str]) -> Optional[DBAgency]:
+    """Match a free-text department name to an Agency via DEPT_MAP aliases."""
+    if not name:
+        return None
+    needle = name.strip().lower()
+    for agency in db.query(DBAgency).all():
+        aliases = DEPT_MAP.get(agency.name.upper(), [agency.name])
+        if agency.name.lower() == needle or any(a.lower() in needle for a in aliases):
+            return agency
+    return None
+
+
+def _log_action(db: Session, staff: DBStaff, report: DBComplaint, status: str, remarks: str) -> None:
+    """Append an AuthorityAction audit row, matching the existing workflow steps."""
+    cat_rec = db.query(DBCategory).filter(DBCategory.name == report.categories).first()
+    db.add(DBAuthorityAction(
+        status=status,
+        remarks=remarks[:1000],
+        staffID=staff.id,
+        complaintID=report.id,
+        categoryID=cat_rec.categoryID if cat_rec else None,
+    ))
+
+
+def _require_team_access(staff: DBStaff, report: DBComplaint) -> None:
+    """Admins act anywhere; an authority may only act on their own team's work."""
+    if staff.role == "admin":
+        return
+    if staff.role != "authority" and not (staff.role or "").startswith("authority"):
+        raise HTTPException(status_code=403, detail="Only an authority or admin may do this.")
+    if report.assigned_agency_id and report.assigned_agency_id != staff.agencyID:
+        raise HTTPException(
+            status_code=403,
+            detail="This report belongs to another team. Ask an admin to transfer it.",
+        )
+
+
+def _get_report_or_404(db: Session, report_id: int) -> DBComplaint:
+    report = db.query(DBComplaint).filter(DBComplaint.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return report
+
+
+def _require_claimant(staff: DBStaff, report: DBComplaint) -> None:
+    """Only the worker holding the job may progress it (admins exempt).
+
+    Previously start-maintenance and complete-task checked nothing beyond a
+    valid token, so any staff account could start or complete anyone's job.
+    """
+    if staff.role == "admin":
+        return
+    if report.assigned_worker_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Claim this task from your team pool before working on it.",
+        )
+    if report.assigned_worker_id != staff.id:
+        raise HTTPException(
+            status_code=403,
+            detail="This task is assigned to another worker.",
+        )
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEAM ROSTER
+# ─────────────────────────────────────────────────────────────
+@app.get("/teams")
+def list_teams(db: Session = Depends(get_db), _token: dict = Depends(require_token)):
+    """Every team with its headcount and current open load.
+
+    Replaces the free-text worker box in the admin panel: the authority picks a
+    real team from this list instead of typing a name that matches nothing.
+    """
+    open_statuses = ["In Review", "In Process", "In Maintenance"]
+    teams = []
+    for agency in db.query(DBAgency).order_by(DBAgency.name).all():
+        worker_count = db.query(func.count(DBStaff.id)).filter(
+            DBStaff.agencyID == agency.agencyID, DBStaff.role == "worker"
+        ).scalar() or 0
+        open_count = db.query(func.count(DBComplaint.id)).filter(
+            DBComplaint.assigned_agency_id == agency.agencyID,
+            DBComplaint.status.in_(open_statuses),
+        ).scalar() or 0
+        unclaimed = db.query(func.count(DBComplaint.id)).filter(
+            DBComplaint.assigned_agency_id == agency.agencyID,
+            DBComplaint.assigned_worker_id.is_(None),
+            DBComplaint.status.in_(open_statuses),
+        ).scalar() or 0
+        teams.append({
+            "id": agency.agencyID,
+            "name": agency.name,
+            "address": agency.address,
+            "worker_count": worker_count,
+            "open_count": open_count,
+            "unclaimed_count": unclaimed,
+        })
+    return teams
+
+
+@app.get("/teams/{team_id}/workers")
+def list_team_workers(
+    team_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Roster for one team, with each worker's current active job count."""
+    staff = _current_staff(db, _token)
+    if staff.role != "admin" and staff.agencyID != team_id:
+        raise HTTPException(status_code=403, detail="You can only view your own team's roster.")
+
+    workers = db.query(DBStaff).filter(
+        DBStaff.agencyID == team_id, DBStaff.role == "worker"
+    ).order_by(DBStaff.username).all()
+
+    out = []
+    for w in workers:
+        active = db.query(func.count(DBComplaint.id)).filter(
+            DBComplaint.assigned_worker_id == w.id,
+            DBComplaint.status.in_(["In Process", "In Maintenance"]),
+        ).scalar() or 0
+        out.append({
+            "id": w.id,
+            "username": w.username,
+            "email": w.email,
+            "phoneNumber": w.phoneNumber,
+            "active_jobs": active,
+        })
+    return out
+
+
+# ─────────────────────────────────────────────────────────────
+#  STEP 2 → Authority dispatches to a team: In Review → In Process (pool)
+# ─────────────────────────────────────────────────────────────
+class DispatchRequest(BaseModel):
+    agency_id: int
+    worker_id: Optional[int] = None   # optional pin; omit to leave in the pool
+    note: str = Field("", max_length=1000)
+
+
+@app.post("/reports/{report_id}/dispatch")
+def dispatch_to_team(
+    report_id: int,
+    req: DispatchRequest,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Send a report to a team's shared pool, optionally pinned to one worker."""
+    staff = _current_staff(db, _token)
+    report = _get_report_or_404(db, report_id)
+    _require_team_access(staff, report)
+
+    agency = db.query(DBAgency).filter(DBAgency.agencyID == req.agency_id).first()
+    if not agency:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    pinned = None
+    if req.worker_id is not None:
+        pinned = db.query(DBStaff).filter(
+            DBStaff.id == req.worker_id, DBStaff.role == "worker"
+        ).first()
+        if not pinned:
+            raise HTTPException(status_code=404, detail="Worker not found")
+        if pinned.agencyID != agency.agencyID:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{pinned.username} is not a member of {agency.name}.",
+            )
+
+    now = datetime.now(timezone.utc).isoformat()
+    report.status = "In Process"
+    report.assigned_agency_id = agency.agencyID
+    report.assigned_department = agency.name
+    report.dispatched_at = now
+    report.in_process_at = now
+    report.assigned_worker_id = pinned.id if pinned else None
+    report.assigned_worker = pinned.username if pinned else None
+    report.claimed_at = now if pinned else None
+
+    if req.note:
+        existing = report.authority_notes or ""
+        sep = "\n" if existing else ""
+        report.authority_notes = existing + sep + f"[Authority] {req.note}"
+
+    target = f"{agency.name} pool" if not pinned else f"{pinned.username} ({agency.name})"
+    _log_action(db, staff, report, "In Process", f"Dispatched to {target}. {req.note}".strip())
+
+    db.commit()
+    db.refresh(report)
+    return _serialize(report)
+
+
+# Legacy path — the admin panel and older clients still POST a worker *name* here.
 class AssignRequest(BaseModel):
     worker_name: str = Field(..., max_length=128)
     note: str = Field("", max_length=1000)
@@ -1779,34 +2132,515 @@ def authority_assign(
     db: Session = Depends(get_db),
     _token: dict = Depends(require_token),
 ):
-    """Authority assigns a worker to an In Review report (→ In Process)."""
-    report = db.query(DBComplaint).filter(DBComplaint.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    """Assign by worker name (→ In Process).
+
+    Kept for backwards compatibility. Where the name matches a real worker this
+    now also sets the team and worker foreign keys, so a legacy assign lands in
+    the same state as a dispatch-with-pin. An unmatched name still writes the
+    free-text field rather than failing, so nothing that used to work breaks.
+    """
+    staff = _current_staff(db, _token)
+    report = _get_report_or_404(db, report_id)
+    _require_team_access(staff, report)
+
     now = datetime.now(timezone.utc).isoformat()
+    worker = db.query(DBStaff).filter(
+        DBStaff.username.ilike(req.worker_name.strip()), DBStaff.role == "worker"
+    ).first()
+
     report.status = "In Process"
     report.assigned_worker = req.worker_name
     report.in_process_at = now
+    report.dispatched_at = report.dispatched_at or now
+
+    if worker:
+        report.assigned_worker_id = worker.id
+        report.claimed_at = now
+        if worker.agencyID:
+            report.assigned_agency_id = worker.agencyID
+            agency = db.query(DBAgency).filter(DBAgency.agencyID == worker.agencyID).first()
+            if agency:
+                report.assigned_department = agency.name
+    elif report.assigned_agency_id is None and staff.agencyID:
+        # No such worker — keep it in the assigning authority's own team pool
+        # instead of stranding it with no owner at all.
+        report.assigned_agency_id = staff.agencyID
+
     if req.note:
         existing = report.authority_notes or ""
         sep = "\n" if existing else ""
         report.authority_notes = existing + sep + f"[Authority] {req.note}"
-    
-    # Log AuthorityAction
-    staff = db.query(DBStaff).filter(DBStaff.id == int(_token["sub"])).first()
-    if staff:
-        cat_rec = db.query(DBCategory).filter(DBCategory.name == report.categories).first()
-        db.add(DBAuthorityAction(
-            status="In Process",
-            remarks=f"Assigned to {req.worker_name}. {req.note}",
-            staffID=staff.id,
-            complaintID=report.id,
-            categoryID=cat_rec.categoryID if cat_rec else None
-        ))
-        
+
+    _log_action(db, staff, report, "In Process", f"Assigned to {req.worker_name}. {req.note}".strip())
+
     db.commit()
     db.refresh(report)
     return _serialize(report)
+
+
+# ─────────────────────────────────────────────────────────────
+#  STEP 2b → Worker claims from the team pool (first to accept wins)
+# ─────────────────────────────────────────────────────────────
+@app.post("/reports/{report_id}/claim")
+def claim_report(
+    report_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Claim an unclaimed job from your team's pool.
+
+    The update is conditional on assigned_worker_id still being NULL and is
+    committed in one statement, so two workers tapping Accept at the same moment
+    cannot both win — the loser gets a 409 rather than silently stealing the job.
+    """
+    staff = _current_staff(db, _token)
+    if staff.role != "worker":
+        raise HTTPException(status_code=403, detail="Only workers can claim tasks.")
+    if not staff.agencyID:
+        raise HTTPException(status_code=400, detail="You are not assigned to a team yet.")
+
+    report = _get_report_or_404(db, report_id)
+    if report.assigned_agency_id != staff.agencyID:
+        raise HTTPException(status_code=403, detail="This task belongs to another team.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    updated = (
+        db.query(DBComplaint)
+        .filter(
+            DBComplaint.id == report_id,
+            DBComplaint.assigned_worker_id.is_(None),
+            DBComplaint.assigned_agency_id == staff.agencyID,
+        )
+        .update(
+            {
+                "assigned_worker_id": staff.id,
+                "assigned_worker": staff.username,
+                "claimed_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    if updated == 0:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="This task was already claimed by another worker.",
+        )
+
+    db.refresh(report)
+    _log_action(db, staff, report, report.status, f"Claimed from {report.assigned_department} pool")
+    db.commit()
+    db.refresh(report)
+    return _serialize(report)
+
+
+class ReleaseRequest(BaseModel):
+    reason: str = Field("", max_length=1000)
+
+
+@app.post("/reports/{report_id}/release")
+def release_report(
+    report_id: int,
+    req: ReleaseRequest,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Give a claimed job back to your own team's pool.
+
+    No approval needed: the work stays inside the team, it just becomes
+    available again. release_count feeds the bottleneck view — a report that
+    keeps bouncing is a signal the team cannot handle it.
+    """
+    staff = _current_staff(db, _token)
+    report = _get_report_or_404(db, report_id)
+
+    is_owner = report.assigned_worker_id == staff.id
+    is_supervisor = staff.role == "admin" or (staff.role or "").startswith("authority")
+    if not (is_owner or is_supervisor):
+        raise HTTPException(status_code=403, detail="You have not claimed this task.")
+    if report.assigned_worker_id is None:
+        raise HTTPException(status_code=400, detail="This task is already in the pool.")
+    if report.worker_completed == 1:
+        raise HTTPException(status_code=400, detail="Completion proof was already submitted.")
+
+    released_from = report.assigned_worker
+    report.assigned_worker_id = None
+    report.assigned_worker = None
+    report.claimed_at = None
+    report.release_count = (report.release_count or 0) + 1
+    # Back to the pool: a released job is un-started again.
+    report.status = "In Process"
+    report.in_maintenance_at = None
+    report.dispatched_at = datetime.now(timezone.utc).isoformat()
+
+    if req.reason:
+        existing = report.authority_notes or ""
+        sep = "\n" if existing else ""
+        report.authority_notes = existing + sep + f"[Released by {released_from}] {req.reason}"
+
+    _log_action(db, staff, report, "In Process", f"Released back to pool by {released_from}. {req.reason}".strip())
+
+    db.commit()
+    db.refresh(report)
+    return _serialize(report)
+
+
+# ─────────────────────────────────────────────────────────────
+#  CROSS-TEAM HANDOVER
+#
+#  Two routes, deliberately: a team can *ask* to be relieved of a job
+#  (transfer-request → approval), and an authority can *push* a job to another
+#  team when it plainly is not getting done.
+# ─────────────────────────────────────────────────────────────
+def _move_report_to_team(
+    db: Session, report: DBComplaint, target: DBAgency, actor: DBStaff, reason: str
+) -> None:
+    """Hand a report to another team, dropping it into that team's pool."""
+    now = datetime.now(timezone.utc).isoformat()
+    origin = report.assigned_department or "unassigned"
+
+    report.assigned_agency_id = target.agencyID
+    report.assigned_department = target.name
+    report.assigned_worker_id = None
+    report.assigned_worker = None
+    report.claimed_at = None
+    report.dispatched_at = now
+    report.in_maintenance_at = None
+    if report.status in ("In Review", "In Maintenance"):
+        report.status = "In Process"
+    report.in_process_at = report.in_process_at or now
+
+    existing = report.authority_notes or ""
+    sep = "\n" if existing else ""
+    report.authority_notes = existing + sep + f"[Transfer {origin} → {target.name}] {reason}".strip()
+
+    _log_action(db, actor, report, report.status, f"Transferred {origin} → {target.name}. {reason}".strip())
+
+
+class TransferRequestBody(BaseModel):
+    to_agency_id: Optional[int] = None
+    reason: str = Field("", max_length=1000)
+
+
+@app.post("/reports/{report_id}/transfer")
+def transfer_report(
+    report_id: int,
+    req: TransferRequestBody,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Authority/admin moves a report straight to another team."""
+    staff = _current_staff(db, _token)
+    report = _get_report_or_404(db, report_id)
+    _require_team_access(staff, report)
+
+    if req.to_agency_id is None:
+        raise HTTPException(status_code=400, detail="Pick a destination team.")
+    target = db.query(DBAgency).filter(DBAgency.agencyID == req.to_agency_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Destination team not found")
+    if target.agencyID == report.assigned_agency_id:
+        raise HTTPException(status_code=400, detail="That team already owns this report.")
+    if report.status in ("Resolved", "Rejected"):
+        raise HTTPException(status_code=400, detail="This report is already closed.")
+
+    _move_report_to_team(db, report, target, staff, req.reason)
+    db.commit()
+    db.refresh(report)
+    return _serialize(report)
+
+
+@app.post("/reports/{report_id}/transfer-request")
+def create_transfer_request(
+    report_id: int,
+    req: TransferRequestBody,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Ask for a report to be taken off this team (worker or authority)."""
+    staff = _current_staff(db, _token)
+    report = _get_report_or_404(db, report_id)
+
+    if staff.role == "worker" and report.assigned_agency_id != staff.agencyID:
+        raise HTTPException(status_code=403, detail="This task belongs to another team.")
+    if report.status in ("Resolved", "Rejected"):
+        raise HTTPException(status_code=400, detail="This report is already closed.")
+
+    existing = db.query(DBTransferRequest).filter(
+        DBTransferRequest.complaintID == report.id,
+        DBTransferRequest.status == "pending",
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="A release request for this report is already awaiting a decision.",
+        )
+
+    tr = DBTransferRequest(
+        complaintID=report.id,
+        from_agency_id=report.assigned_agency_id,
+        to_agency_id=req.to_agency_id,
+        requested_by_staff_id=staff.id,
+        reason=req.reason,
+        status="pending",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    db.add(tr)
+    _log_action(db, staff, report, report.status, f"Release requested by {staff.username}. {req.reason}".strip())
+    db.commit()
+    db.refresh(tr)
+    return _serialize_transfer(db, tr)
+
+
+def _serialize_transfer(db: Session, tr: DBTransferRequest) -> dict:
+    def agency_name(aid):
+        if not aid:
+            return None
+        a = db.query(DBAgency).filter(DBAgency.agencyID == aid).first()
+        return a.name if a else None
+
+    requester = db.query(DBStaff).filter(DBStaff.id == tr.requested_by_staff_id).first()
+    report = db.query(DBComplaint).filter(DBComplaint.id == tr.complaintID).first()
+    return {
+        "id": tr.id,
+        "report_id": tr.complaintID,
+        "report_title": (report.categories if report else None),
+        "report_status": (report.status if report else None),
+        "from_agency_id": tr.from_agency_id,
+        "from_team": agency_name(tr.from_agency_id),
+        "to_agency_id": tr.to_agency_id,
+        "to_team": agency_name(tr.to_agency_id),
+        "requested_by": requester.username if requester else None,
+        "requested_by_role": requester.role if requester else None,
+        "reason": tr.reason,
+        "status": tr.status,
+        "decision_note": tr.decision_note,
+        "decided_at": tr.decided_at,
+        "created_at": tr.created_at,
+    }
+
+
+@app.get("/transfers")
+def list_transfers(
+    status: str = "pending",
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Release/transfer requests an authority needs to act on."""
+    staff = _current_staff(db, _token)
+    if staff.role == "worker":
+        raise HTTPException(status_code=403, detail="Only an authority or admin may review transfers.")
+
+    query = db.query(DBTransferRequest)
+    if status and status != "all":
+        query = query.filter(DBTransferRequest.status == status)
+    if staff.role != "admin":
+        # An authority sees requests leaving their team and requests aimed at it.
+        query = query.filter(
+            or_(
+                DBTransferRequest.from_agency_id == staff.agencyID,
+                DBTransferRequest.to_agency_id == staff.agencyID,
+            )
+        )
+    rows = query.order_by(DBTransferRequest.id.desc()).limit(200).all()
+    return [_serialize_transfer(db, tr) for tr in rows]
+
+
+class TransferDecision(BaseModel):
+    to_agency_id: Optional[int] = None   # required if the request left it open
+    note: str = Field("", max_length=1000)
+
+
+@app.post("/transfers/{transfer_id}/approve")
+def approve_transfer(
+    transfer_id: int,
+    req: TransferDecision,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Approve a release request and move the report to the destination team."""
+    staff = _current_staff(db, _token)
+    if staff.role == "worker":
+        raise HTTPException(status_code=403, detail="Only an authority or admin may decide transfers.")
+
+    tr = db.query(DBTransferRequest).filter(DBTransferRequest.id == transfer_id).first()
+    if not tr:
+        raise HTTPException(status_code=404, detail="Transfer request not found")
+    if tr.status != "pending":
+        raise HTTPException(status_code=400, detail=f"This request was already {tr.status}.")
+    if staff.role != "admin" and staff.agencyID not in (tr.from_agency_id, tr.to_agency_id):
+        raise HTTPException(status_code=403, detail="This request does not involve your team.")
+
+    target_id = req.to_agency_id or tr.to_agency_id
+    if not target_id:
+        raise HTTPException(status_code=400, detail="Pick a destination team for this request.")
+    target = db.query(DBAgency).filter(DBAgency.agencyID == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Destination team not found")
+
+    report = _get_report_or_404(db, tr.complaintID)
+    if target.agencyID == report.assigned_agency_id:
+        raise HTTPException(status_code=400, detail="That team already owns this report.")
+
+    _move_report_to_team(db, report, target, staff, req.note or (tr.reason or "Release approved"))
+
+    tr.status = "approved"
+    tr.to_agency_id = target.agencyID
+    tr.decided_by_staff_id = staff.id
+    tr.decided_at = datetime.now(timezone.utc).isoformat()
+    tr.decision_note = req.note
+
+    db.commit()
+    db.refresh(tr)
+    return _serialize_transfer(db, tr)
+
+
+@app.post("/transfers/{transfer_id}/deny")
+def deny_transfer(
+    transfer_id: int,
+    req: TransferDecision,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Deny a release request; the report stays where it is."""
+    staff = _current_staff(db, _token)
+    if staff.role == "worker":
+        raise HTTPException(status_code=403, detail="Only an authority or admin may decide transfers.")
+
+    tr = db.query(DBTransferRequest).filter(DBTransferRequest.id == transfer_id).first()
+    if not tr:
+        raise HTTPException(status_code=404, detail="Transfer request not found")
+    if tr.status != "pending":
+        raise HTTPException(status_code=400, detail=f"This request was already {tr.status}.")
+    if staff.role != "admin" and staff.agencyID not in (tr.from_agency_id, tr.to_agency_id):
+        raise HTTPException(status_code=403, detail="This request does not involve your team.")
+
+    tr.status = "denied"
+    tr.decided_by_staff_id = staff.id
+    tr.decided_at = datetime.now(timezone.utc).isoformat()
+    tr.decision_note = req.note
+
+    report = db.query(DBComplaint).filter(DBComplaint.id == tr.complaintID).first()
+    if report:
+        _log_action(db, staff, report, report.status, f"Release request denied. {req.note}".strip())
+
+    db.commit()
+    db.refresh(tr)
+    return _serialize_transfer(db, tr)
+
+
+# ─────────────────────────────────────────────────────────────
+#  BOTTLENECK VIEW
+# ─────────────────────────────────────────────────────────────
+def _parse_ts(raw: Optional[str]) -> Optional[datetime]:
+    """Parse the ISO strings this schema stores workflow timestamps in."""
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+@app.get("/teams/workload")
+def team_workload(db: Session = Depends(get_db), _token: dict = Depends(require_token)):
+    """Per-team load, capacity, ageing and throughput — the bottleneck board.
+
+    Returns a derived status per team so the web panel and the app colour-code
+    from one place instead of each re-deriving the thresholds.
+    """
+    staff = _current_staff(db, _token)
+    if staff.role == "worker":
+        raise HTTPException(status_code=403, detail="Only an authority or admin may view team workload.")
+
+    now = datetime.now(timezone.utc)
+    week_ago = now - timedelta(days=7)
+    open_statuses = ["In Review", "In Process", "In Maintenance"]
+
+    # Every authority sees every team: choosing where to move work requires the
+    # comparison. Their own team is flagged via is_mine so the UI can lead with it.
+    agencies = db.query(DBAgency).order_by(DBAgency.name).all()
+
+    out = []
+    for agency in agencies:
+        open_reports = db.query(DBComplaint).filter(
+            DBComplaint.assigned_agency_id == agency.agencyID,
+            DBComplaint.status.in_(open_statuses),
+        ).all()
+
+        unclaimed = [r for r in open_reports if r.assigned_worker_id is None]
+        claimed = [r for r in open_reports if r.assigned_worker_id is not None]
+        in_maintenance = [r for r in open_reports if r.status == "In Maintenance"]
+
+        workers = db.query(func.count(DBStaff.id)).filter(
+            DBStaff.agencyID == agency.agencyID, DBStaff.role == "worker"
+        ).scalar() or 0
+
+        # Ageing: how long the oldest unclaimed job has been sitting in the pool.
+        ages = [
+            (now - ts).total_seconds() / 3600.0
+            for ts in (_parse_ts(r.dispatched_at or r.in_process_at) for r in unclaimed)
+            if ts is not None
+        ]
+        oldest_hours = round(max(ages), 1) if ages else 0.0
+        breached = sum(1 for a in ages if a > SLA_HOURS)
+
+        # Throughput: is the team keeping up with what arrives?
+        completed_7d = sum(
+            1 for r in db.query(DBComplaint).filter(
+                DBComplaint.assigned_agency_id == agency.agencyID,
+                DBComplaint.status == "Resolved",
+            ).all()
+            if (ts := _parse_ts(r.resolved_at)) and ts >= week_ago
+        )
+        arrived_7d = db.query(func.count(DBComplaint.id)).filter(
+            DBComplaint.assigned_agency_id == agency.agencyID,
+            DBComplaint.timestamp >= week_ago,
+        ).scalar() or 0
+
+        load_per_worker = round(len(open_reports) / workers, 2) if workers else None
+        bounced = sum(1 for r in open_reports if (r.release_count or 0) > 0)
+
+        # Any one of these alone is a warning; two or more is a real bottleneck.
+        strain = 0
+        if load_per_worker is None and open_reports:
+            strain += 2                       # work with nobody to do it
+        elif load_per_worker is not None and load_per_worker >= 5:
+            strain += 2 if load_per_worker >= 8 else 1
+        if breached:
+            strain += 2 if breached >= 3 else 1
+        if oldest_hours > SLA_HOURS:
+            strain += 1
+        if arrived_7d > completed_7d and arrived_7d - completed_7d >= 3:
+            strain += 1
+        status = "bottleneck" if strain >= 3 else "strained" if strain >= 1 else "healthy"
+
+        out.append({
+            "id": agency.agencyID,
+            "name": agency.name,
+            "is_mine": agency.agencyID == staff.agencyID,
+            # Open workload
+            "open_count": len(open_reports),
+            "unclaimed_count": len(unclaimed),
+            "claimed_count": len(claimed),
+            "in_maintenance_count": len(in_maintenance),
+            "bounced_count": bounced,
+            # Load vs capacity
+            "worker_count": workers,
+            "load_per_worker": load_per_worker,
+            # Ageing / SLA
+            "oldest_unclaimed_hours": oldest_hours,
+            "sla_hours": SLA_HOURS,
+            "sla_breached_count": breached,
+            # Throughput
+            "completed_7d": completed_7d,
+            "arrived_7d": arrived_7d,
+            "net_7d": completed_7d - arrived_7d,
+            "status": status,
+        })
+
+    return {"sla_hours": SLA_HOURS, "teams": out}
 
 
 # STEP 3 → Worker accepts task: In Process → In Maintenance
@@ -1817,24 +2651,14 @@ def start_maintenance(
     _token: dict = Depends(require_token),
 ):
     """Worker starts maintenance on an In Process report (→ In Maintenance)."""
-    report = db.query(DBComplaint).filter(DBComplaint.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    staff = _current_staff(db, _token)
+    report = _get_report_or_404(db, report_id)
+    _require_claimant(staff, report)
     report.status = "In Maintenance"
     report.in_maintenance_at = datetime.now(timezone.utc).isoformat()
-    
-    # Log AuthorityAction
-    staff = db.query(DBStaff).filter(DBStaff.id == int(_token["sub"])).first()
-    if staff:
-        cat_rec = db.query(DBCategory).filter(DBCategory.name == report.categories).first()
-        db.add(DBAuthorityAction(
-            status="In Maintenance",
-            remarks="Worker started maintenance",
-            staffID=staff.id,
-            complaintID=report.id,
-            categoryID=cat_rec.categoryID if cat_rec else None
-        ))
-        
+
+    _log_action(db, staff, report, "In Maintenance", "Worker started maintenance")
+
     db.commit()
     db.refresh(report)
     return _serialize(report)
@@ -1850,9 +2674,9 @@ async def complete_task(
     _token: dict = Depends(require_token),
 ):
     """Worker submits completion proof (photo + notes)."""
-    report = db.query(DBComplaint).filter(DBComplaint.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    staff = _current_staff(db, _token)
+    report = _get_report_or_404(db, report_id)
+    _require_claimant(staff, report)
 
     if report.worker_completed == 1:
         raise HTTPException(
@@ -1873,17 +2697,7 @@ async def complete_task(
         )
         report.completion_image_path = image_url
 
-    # Log AuthorityAction
-    staff = db.query(DBStaff).filter(DBStaff.id == int(_token["sub"])).first()
-    if staff:
-        cat_rec = db.query(DBCategory).filter(DBCategory.name == report.categories).first()
-        db.add(DBAuthorityAction(
-            status="In Maintenance",
-            remarks=f"Completed task: {notes}",
-            staffID=staff.id,
-            complaintID=report.id,
-            categoryID=cat_rec.categoryID if cat_rec else None
-        ))
+    _log_action(db, staff, report, "In Maintenance", f"Completed task: {notes}")
 
     db.commit()
     db.refresh(report)

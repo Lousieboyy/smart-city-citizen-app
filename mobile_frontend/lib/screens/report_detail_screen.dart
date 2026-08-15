@@ -159,6 +159,107 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     }
   }
 
+  /// Action: Worker claims this job from the team pool.
+  ///
+  /// A 409 is the expected outcome of losing a race, not an error worth
+  /// dressing up as one — say who got it and refresh.
+  Future<void> _handleClaim() async {
+    setState(() => _isLoadingAction = true);
+    try {
+      final res = await ApiService.claimTask(_report['id']);
+      if (res.statusCode == 200) {
+        _showSnackBar(tr('worker_claim_success'), PixelTheme.accentGreen);
+        await _refreshReport();
+      } else if (res.statusCode == 409) {
+        _showSnackBar(tr('worker_claim_taken'), PixelTheme.accentOrange);
+        await _refreshReport();
+      } else {
+        _showSnackBar(
+          ApiService.errorDetail(res, tr('worker_claim_failed')),
+          PixelTheme.alertRed,
+        );
+      }
+    } catch (e) {
+      _showSnackBar(tr('detail_connection_failed'), PixelTheme.alertRed);
+    } finally {
+      if (mounted) setState(() => _isLoadingAction = false);
+    }
+  }
+
+  /// Action: Worker gives the job back to their own team pool, or asks an
+  /// authority to move it to a different team entirely.
+  Future<void> _handleReleaseOrTransfer({required bool transfer}) async {
+    final reason = await _promptForReason(
+      title: tr(transfer ? 'worker_transfer_title' : 'worker_release_title'),
+      body: tr(transfer ? 'worker_transfer_body' : 'worker_release_body'),
+    );
+    if (reason == null) return;   // dismissed
+
+    setState(() => _isLoadingAction = true);
+    try {
+      final res = transfer
+          ? await ApiService.requestTransfer(_report['id'], reason: reason)
+          : await ApiService.releaseTask(_report['id'], reason: reason);
+      if (res.statusCode == 200) {
+        _showSnackBar(
+          tr(transfer ? 'worker_transfer_success' : 'worker_release_success'),
+          PixelTheme.accentGreen,
+        );
+        await _refreshReport();
+      } else {
+        _showSnackBar(
+          ApiService.errorDetail(
+            res,
+            tr(transfer ? 'worker_transfer_failed' : 'worker_release_failed'),
+          ),
+          PixelTheme.alertRed,
+        );
+      }
+    } catch (e) {
+      _showSnackBar(tr('detail_connection_failed'), PixelTheme.alertRed);
+    } finally {
+      if (mounted) setState(() => _isLoadingAction = false);
+    }
+  }
+
+  /// Returns the typed reason, or null if the worker backed out.
+  Future<String?> _promptForReason({required String title, required String body}) {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(body, style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              maxLines: 3,
+              maxLength: 500,
+              decoration: InputDecoration(
+                labelText: tr('worker_release_reason'),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr('common_cancel')),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: Text(tr('common_submit')),
+          ),
+        ],
+      ),
+    );
+  }
+
   // Action: Worker accepts & starts work
   Future<void> _handleStartMaintenance() async {
     setState(() => _isLoadingAction = true);
@@ -1612,6 +1713,11 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     );
   }
 
+  /// True while the job is still sitting unclaimed in the team pool — nobody
+  /// owns it yet, so the only action available is to accept it.
+  bool get _inPool =>
+      _report['in_pool'] == true || _report['assigned_worker_id'] == null;
+
   Widget _buildWorkerActionCard(String status) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -1647,19 +1753,20 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
             ),
             const SizedBox(height: 14),
             Text(
-              tr('detail_accept_start_maintenance'),
+              tr(_inPool ? 'worker_pool_title' : 'detail_accept_start_maintenance'),
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
                 color: isDark ? Colors.white : const Color(0xFF2B2B28),
               ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
-              tr('detail_accept_start_body'),
+              tr(_inPool ? 'worker_pool_body' : 'detail_accept_start_body'),
               style: TextStyle(
-                fontSize: 13, 
-                color: isDark ? Colors.white70 : const Color(0xFF8A8A85), 
+                fontSize: 13,
+                color: isDark ? Colors.white70 : const Color(0xFF8A8A85),
                 height: 1.4,
               ),
               textAlign: TextAlign.center,
@@ -1669,9 +1776,13 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
               width: double.infinity,
               height: 52,
               child: ElevatedButton(
-                onPressed: _isLoadingAction ? null : _handleStartMaintenance,
+                // Unclaimed work must be claimed first — the server rejects a
+                // start from anyone who does not hold the job.
+                onPressed: _isLoadingAction
+                    ? null
+                    : (_inPool ? _handleClaim : _handleStartMaintenance),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: PixelTheme.accentOrange,
+                  backgroundColor: _inPool ? PixelTheme.accentCyan : PixelTheme.accentOrange,
                   foregroundColor: Colors.white,
                   disabledBackgroundColor: PixelTheme.textMuted,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
@@ -1684,11 +1795,42 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
                       )
                     : Text(
-                        tr('detail_accept_start_button'),
+                        tr(_inPool ? 'worker_accept_task' : 'detail_accept_start_button'),
                         style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
                       ),
               ),
             ),
+            if (!_inPool) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: _isLoadingAction
+                          ? null
+                          : () => _handleReleaseOrTransfer(transfer: false),
+                      icon: const Icon(Icons.undo_rounded, size: 16),
+                      label: Text(
+                        tr('worker_release_task'),
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: _isLoadingAction
+                          ? null
+                          : () => _handleReleaseOrTransfer(transfer: true),
+                      icon: const Icon(Icons.swap_horiz_rounded, size: 16),
+                      label: Text(
+                        tr('worker_transfer_task'),
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       );
