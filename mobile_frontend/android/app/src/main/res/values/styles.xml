@@ -13,6 +13,9 @@
 
          This Theme is only used starting with V2 of Flutter's Android embedding. -->
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
-        <item name="android:windowBackground">?android:colorBackground</item>
+        <!-- The Flutter UI is locked to the light cream theme, so pin the
+             window behind it to the same color rather than inheriting the
+             platform background. -->
+        <item name="android:windowBackground">@color/splash_background</item>
     </style>
 </resources>

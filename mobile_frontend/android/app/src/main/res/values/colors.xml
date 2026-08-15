@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors PixelTheme.bgPrimary (lib/pixel_theme.dart). The native launch
+         window paints this before Flutter draws its first frame, so the app
+         opens straight onto the splash canvas instead of flashing white (or
+         black, under the OS dark theme) first. Keep the two values in sync. -->
+    <color name="splash_background">#F7F3EC</color>
+</resources>

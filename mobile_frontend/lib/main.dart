@@ -3,10 +3,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'user_session.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/splash_screen.dart';
 import 'theme_manager.dart';
 import 'pixel_theme.dart';
 import 'localization/locale_manager.dart';
-import 'localization/app_strings.dart';
 import 'notification_settings.dart';
 
 void main() {
@@ -25,10 +25,25 @@ class _MyAppState extends State<MyApp> {
   bool _isLoggedIn = false;
   bool _isLoading = true;
 
+  /// Session restore usually finishes in a few milliseconds, which would flash
+  /// the splash for a single frame. Hold it until the intro animation has
+  /// played through, so launch reads as deliberate rather than glitchy.
+  static const Duration _minimumSplashDuration =
+      Duration(milliseconds: 1600); // ≥ SplashScreen.introDuration
+
   @override
   void initState() {
     super.initState();
-    _restoreSession();
+    _bootstrap();
+  }
+
+  /// Restore the session and hold the splash for whichever takes longer.
+  Future<void> _bootstrap() async {
+    await Future.wait([
+      _restoreSession(),
+      Future<void>.delayed(_minimumSplashDuration),
+    ]);
+    if (mounted) setState(() => _isLoading = false);
   }
 
   /// Restore the user session from persistent storage on app launch safely.
@@ -73,50 +88,13 @@ class _MyAppState extends State<MyApp> {
       }
     } catch (e) {
       debugPrint('[MyApp] Error restoring session: $e');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+      // Swallowed on purpose: a corrupt or unreadable prefs store should drop
+      // the user at Login, not wedge the app on the splash screen.
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: PixelTheme.buildTheme(),
-        home: Scaffold(
-          backgroundColor: PixelTheme.bgPrimary,
-          body: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 3,
-                    color: PixelTheme.accentOrange,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  tr('common_loading'),
-                  style: PixelTheme.pixelCaption(
-                    fontSize: 10,
-                    color: PixelTheme.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: ThemeManager.themeModeNotifier,
       builder: (context, currentThemeMode, child) {
@@ -129,7 +107,30 @@ class _MyAppState extends State<MyApp> {
               themeMode: ThemeMode.dark, // locked to dark retro theme
               theme: PixelTheme.buildTheme(),
               darkTheme: PixelTheme.buildTheme(),
-              home: _isLoggedIn ? const HomeScreen() : const LoginScreen(),
+              // Cross-fades the splash into the first real screen instead of
+              // cutting to it. Home and Login share a runtimeType across
+              // rebuilds, so only the splash swap animates — a locale change
+              // still updates the live screen in place rather than replaying
+              // a transition over it.
+              home: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 450),
+                child: _isLoading
+                    ? const SplashScreen()
+                    // Deliberately NOT const.
+                    //
+                    // A const constructor returns the same canonicalised
+                    // instance on every rebuild. Flutter's element tree
+                    // short-circuits when the new widget is identical to the
+                    // old one, so the entire screen below this point would be
+                    // skipped — the locale notifier fires, MaterialApp
+                    // rebuilds, and nothing re-translates.
+                    //
+                    // Building a fresh instance lets the element update in
+                    // place: the subtree rebuilds with the new language while
+                    // State is preserved, so the selected tab and already-
+                    // loaded reports survive the switch.
+                    : (_isLoggedIn ? HomeScreen() : LoginScreen()),
+              ),
             );
           },
         );
