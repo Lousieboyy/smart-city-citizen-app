@@ -47,6 +47,10 @@ dependencies:
   # probes the legacy AssetManifest.json, which this engine no longer emits.
   google_fonts: ^8.2.1
   url_launcher: ^6.3.2
+  # Used to downscale photos before upload. image_picker's own imageQuality
+  # option cannot be used for this: it re-encodes natively and strips the EXIF
+  # and provenance metadata the backend needs to detect AI-generated images.
+  image: ^4.5.4
 
 dev_dependencies:
   flutter_test:

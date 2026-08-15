@@ -103,12 +103,22 @@ class ApiService {
   }
 
   /// Predict using raw bytes (works on both web and mobile).
+  ///
+  /// [metadataBlob] is the leading slice of the *original* camera file. The
+  /// image we upload for classification is downscaled, and re-encoding destroys
+  /// the EXIF/XMP/C2PA blocks the backend uses to tell a real photo from a
+  /// generated one. Those blocks all sit at the front of the file, so a partial
+  /// copy is enough to preserve them.
   static Future<http.StreamedResponse> predictBytes(
-      Uint8List bytes, String filename) {
+      Uint8List bytes, String filename, {Uint8List? metadataBlob}) {
     final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/predict'));
     req.headers.addAll(_authHeaders);
     req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
-    return req.send().timeout(const Duration(seconds: 10));
+    if (metadataBlob != null && metadataBlob.isNotEmpty) {
+      req.files.add(http.MultipartFile.fromBytes(
+          'metadata_blob', metadataBlob, filename: 'metadata.bin'));
+    }
+    return req.send().timeout(const Duration(seconds: 20));
   }
 
   // ── Duplicate Check & Upvoting ──────────────────────────────────────────
@@ -150,13 +160,20 @@ class ApiService {
   }
 
   /// Submit using raw bytes (works on both web and mobile).
+  ///
+  /// See [predictBytes] for why [metadataBlob] is sent alongside the image.
   static Future<http.StreamedResponse> submitReportBytes(
-      Map<String, String> fields, Uint8List bytes, String filename) {
+      Map<String, String> fields, Uint8List bytes, String filename,
+      {Uint8List? metadataBlob}) {
     final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/reports/'));
     req.headers.addAll(_authHeaders);
     req.fields.addAll(fields);
     req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
-    return req.send().timeout(const Duration(seconds: 15));
+    if (metadataBlob != null && metadataBlob.isNotEmpty) {
+      req.files.add(http.MultipartFile.fromBytes(
+          'metadata_blob', metadataBlob, filename: 'metadata.bin'));
+    }
+    return req.send().timeout(const Duration(seconds: 25));
   }
 
   /// Start maintenance on a report (Worker accepts task).
@@ -182,8 +199,12 @@ class ApiService {
   }
 
   /// Complete task and submit proof using raw bytes (works on both web and mobile).
+  ///
+  /// Proof photos matter most for authenticity checking: this is the upload a
+  /// worker could fake to claim a job was finished.
   static Future<http.StreamedResponse> completeTaskBytes(
-      int reportId, String notes, Uint8List? bytes, String? filename) async {
+      int reportId, String notes, Uint8List? bytes, String? filename,
+      {Uint8List? metadataBlob}) async {
     final req = http.MultipartRequest(
         'POST', Uri.parse('$baseUrl/reports/$reportId/complete-task'));
     req.headers.addAll(_authHeaders);
@@ -191,7 +212,11 @@ class ApiService {
     if (bytes != null && filename != null) {
       req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
     }
-    return req.send().timeout(const Duration(seconds: 15));
+    if (metadataBlob != null && metadataBlob.isNotEmpty) {
+      req.files.add(http.MultipartFile.fromBytes(
+          'metadata_blob', metadataBlob, filename: 'metadata.bin'));
+    }
+    return req.send().timeout(const Duration(seconds: 25));
   }
 }
 

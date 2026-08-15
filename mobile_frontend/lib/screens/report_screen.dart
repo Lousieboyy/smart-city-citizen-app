@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../utils/image_upload_prep.dart';
 import '../services/api_service.dart';
 import '../user_session.dart';
 import 'login_screen.dart';
@@ -162,23 +163,34 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   // ── Image picking ──────────────────────────────────────────────────────────
+
+  /// Head of the original file, kept purely for authenticity analysis.
+  Uint8List? _metadataBlob;
+
   Future<void> _pickImageFrom(ImageSource source) async {
-    final XFile? picked = await _picker.pickImage(
-      source: source,
-      imageQuality: 80,
-    );
+    // No imageQuality here on purpose. Passing it makes image_picker decode and
+    // re-encode the JPEG natively, which silently strips camera make/model,
+    // GPS, timestamps and provenance metadata. The backend's authenticity check
+    // needs those, so the original must arrive untouched.
+    final XFile? picked = await _picker.pickImage(source: source);
     if (picked == null) return;
 
-    final bytes = await picked.readAsBytes();
+    final original = await picked.readAsBytes();
+
+    // Downscale for upload and classification; keep the head of the original
+    // for forensics.
+    final compressed = await ImageUploadPrep.downscaleForUpload(original);
+    final metadataBlob = ImageUploadPrep.metadataBlob(original);
 
     setState(() {
-      _pickedFile  = picked;
-      _imageBytes  = bytes;
-      _isAnalyzing = true;
+      _pickedFile   = picked;
+      _imageBytes   = compressed;
+      _metadataBlob = metadataBlob;
+      _isAnalyzing  = true;
       _selectedCategories.clear();
-      _confidence  = null;
-      _aiRawResult = null;
-      _gradcamUrl  = null;
+      _confidence   = null;
+      _aiRawResult  = null;
+      _gradcamUrl   = null;
     });
 
     await _classifyImage(picked);
@@ -232,9 +244,14 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
         return;
       }
 
-      final response = isWeb
-          ? await ApiService.predictBytes(_imageBytes!, imageFile.name)
-          : await ApiService.predict(imageFile.path);
+      // Always send bytes now, on every platform: _imageBytes is the downscaled
+      // copy and _metadataBlob carries the original's provenance. Uploading via
+      // the file path would send the full-size original instead.
+      final response = await ApiService.predictBytes(
+        _imageBytes!,
+        imageFile.name,
+        metadataBlob: _metadataBlob,
+      );
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(await response.stream.bytesToString());
@@ -425,7 +442,8 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
 
       final imageName = _pickedFile?.name ?? 'upload.jpg';
       final response = (_imageBytes != null)
-          ? await ApiService.submitReportBytes(fields, _imageBytes!, imageName)
+          ? await ApiService.submitReportBytes(
+              fields, _imageBytes!, imageName, metadataBlob: _metadataBlob)
           : await ApiService.submitReport(fields, _pickedFile!.path);
 
       if (response.statusCode == 200) {

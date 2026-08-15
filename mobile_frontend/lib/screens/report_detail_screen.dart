@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/api_service.dart';
+import '../utils/image_upload_prep.dart';
 import '../app_config.dart';
 import '../user_session.dart';
 import 'history_screen.dart'; // For FullScreenImageViewer reference
@@ -193,6 +194,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
               _notesController.text.trim(),
               _proofImageBytes,
               _proofImageName,
+              metadataBlob: _proofMetadataBlob,
             )
           : await ApiService.completeTask(
               _report['id'],
@@ -220,17 +222,28 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     }
   }
 
+  /// Head of the original proof photo, kept for the backend's authenticity check.
+  ///
+  /// Completion proofs are the highest-risk upload in the system: this is the
+  /// image a worker could fake to claim a job was finished. Preserving the
+  /// original metadata is what lets the server tell a real site photo from a
+  /// generated one.
+  Uint8List? _proofMetadataBlob;
+
   Future<void> _pickImage(ImageSource source) async {
-    final XFile? picked = await _picker.pickImage(
-      source: source,
-      imageQuality: 85,
-    );
+    // No imageQuality: it re-encodes natively and strips EXIF/XMP/C2PA.
+    final XFile? picked = await _picker.pickImage(source: source);
     if (picked == null) return;
-    final bytes = await picked.readAsBytes();
+
+    final original = await picked.readAsBytes();
+    final compressed = await ImageUploadPrep.downscaleForUpload(original);
+    final metadataBlob = ImageUploadPrep.metadataBlob(original);
+
     setState(() {
       _proofImageFile = picked;
-      _proofImageBytes = bytes;
+      _proofImageBytes = compressed;
       _proofImageName = picked.name;
+      _proofMetadataBlob = metadataBlob;
     });
   }
 

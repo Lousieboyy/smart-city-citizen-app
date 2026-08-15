@@ -7,6 +7,12 @@ keras_Model.h5
 .venv/
 dataset_feedback/
 dataset_feedback_index.json
+dataset_feedback_index.jsonl
+dataset_repo/
+ai_data_merged/
+ai_data_holdout/
+model_backup/
 reduce_normal_dataset.py
 train_model.py
+retrain_model.py
 download_data.py

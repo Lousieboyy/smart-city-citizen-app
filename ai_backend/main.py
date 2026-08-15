@@ -21,7 +21,10 @@ Fixes applied vs. original:
 """
 
 import asyncio
+import base64
 import io
+import json
+import logging
 import os
 
 # Limit TensorFlow memory and thread footprint to run under 512MB RAM (Render Free Tier)
@@ -50,7 +53,7 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     Boolean, Column, DateTime, Float, ForeignKey,
-    Integer, String, create_engine, func, text, or_,
+    Integer, String, Text, create_engine, func, text, or_,
 )
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
@@ -89,6 +92,18 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # Allowed MIME types for uploaded images
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
+
+# ─────────────────────────────────────────────────────────────
+#  AI DATASET PIPELINE
+# ─────────────────────────────────────────────────────────────
+# Imported after load_dotenv() — dataset_store reads GITHUB_TOKEN/DATASET_REPO
+# from the environment at import time.
+import dataset_collector
+import dataset_store
+from metadata_forensics import inspect_image_authenticity
 
 # ─────────────────────────────────────────────────────────────
 #  APP
@@ -215,6 +230,38 @@ class DBComplaint(Base):
     upvotes = Column(Integer, default=0)
     categories = Column(String(512))
 
+    # Image provenance (see metadata_forensics.py)
+    image_hash = Column(String(32), nullable=True)
+    authenticity_score = Column(Integer, nullable=True)
+    authenticity_verdict = Column(String(32), nullable=True)
+    authenticity_signals = Column(String(4000), nullable=True)  # JSON list
+
+
+class DBDatasetSample(Base):
+    """One candidate training image harvested from a report."""
+    __tablename__ = "DatasetSample"
+    id = Column(Integer, primary_key=True, index=True)
+    report_id = Column(Integer, ForeignKey("Complaint.complaintID"), nullable=True)
+    image_hash = Column(String(32), index=True, nullable=True)
+    class_label = Column(String(64), nullable=True)
+    confidence = Column(Float, default=0.0)
+    status = Column(String(16), default="pending", index=True)
+    reason = Column(String(512), nullable=True)
+    source = Column(String(32), default="auto")
+    authenticity_verdict = Column(String(32), nullable=True)
+    authenticity_score = Column(Integer, nullable=True)
+    image_path = Column(String(512), nullable=True)   # local path when not yet synced
+    github_path = Column(String(512), nullable=True)
+    synced = Column(Integer, default=0)
+    # Base64 of the prepared (downscaled, metadata-stripped) image, held only
+    # until the sample is pushed to GitHub and then cleared. Necessary because
+    # this backend's disk is ephemeral on Vercel, so a sample buffered for the
+    # next batch would otherwise be gone by the time the batch runs.
+    pending_blob = Column(Text, nullable=True)
+    created_at = Column(String(64), nullable=True)
+    reviewed_by = Column(String(128), nullable=True)
+    reviewed_at = Column(String(64), nullable=True)
+
 
 class DBIssue(Base):
     __tablename__ = "Issue"
@@ -256,6 +303,51 @@ if not inspector.has_table("Complaint") or "location" not in [c["name"] for c in
         print(f"[DB] Warning dropping tables: {e}")
 
 Base.metadata.create_all(bind=engine)
+
+
+def _add_missing_columns():
+    """
+    Additively add newly-introduced columns to existing tables.
+
+    create_all() only creates missing *tables*; it never alters an existing one.
+    Without this, a deployment against a database created before the provenance
+    columns existed would fail every SELECT on Complaint.
+
+    Deliberately additive: no drops, no type changes. The reset path above is
+    destructive and must not be reached for a routine column addition.
+    """
+    additions = {
+        "Complaint": [
+            ("image_hash", "VARCHAR(32)"),
+            ("authenticity_score", "INTEGER"),
+            ("authenticity_verdict", "VARCHAR(32)"),
+            ("authenticity_signals", "VARCHAR(4000)"),
+        ],
+        "DatasetSample": [
+            ("pending_blob", "TEXT"),
+        ],
+    }
+
+    try:
+        live = inspect(engine)
+        for table, columns in additions.items():
+            if not live.has_table(table):
+                continue
+            existing = {c["name"] for c in live.get_columns(table)}
+            for name, sql_type in columns:
+                if name in existing:
+                    continue
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {name} {sql_type}'))
+                    print(f"[DB] Added column {table}.{name}")
+                except Exception as e:
+                    print(f"[DB] Could not add column {table}.{name}: {e}")
+    except Exception as e:
+        print(f"[DB] Column migration skipped: {e}")
+
+
+_add_missing_columns()
 
 # ─────────────────────────────────────────────────────────────
 #  PASSWORD HASHING
@@ -484,6 +576,7 @@ LABELS_PATH = BASE_DIR / "labels.txt"
 
 LOCAL_UPLOAD_DIR = BASE_DIR / "uploads"
 TMP_UPLOAD_DIR = Path("/tmp/uploads") if (os.name != "nt" and os.path.exists("/tmp")) else LOCAL_UPLOAD_DIR
+UPLOAD_DIR = TMP_UPLOAD_DIR
 
 try:
     LOCAL_UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
@@ -531,7 +624,13 @@ def startup_event():
     try:
         if MODEL_PATH.exists() and LABELS_PATH.exists():
             print("[Startup] Loading TFLite model...")
-            import ai_edge_litert.interpreter as tflite
+            try:
+                import ai_edge_litert.interpreter as tflite
+            except ImportError:
+                try:
+                    import tflite_runtime.interpreter as tflite
+                except ImportError:
+                    import tensorflow.lite as tflite
             interpreter = tflite.Interpreter(model_path=str(MODEL_PATH))
             interpreter.allocate_tensors()
             input_details = interpreter.get_input_details()
@@ -661,6 +760,113 @@ async def _read_and_validate_file(file: UploadFile) -> bytes:
     return contents
 
 
+async def _inspect_authenticity(contents: bytes, metadata_blob: Optional[UploadFile] = None,
+                                filename: str = "image.jpg") -> dict:
+    """
+    Run metadata forensics on an upload.
+
+    metadata_blob is an optional head slice of the *original* file sent by the
+    client. It exists because the mobile app downscales before upload, and
+    re-encoding destroys EXIF, XMP and C2PA blocks. Since all of those live at
+    the front of the file, a partial read of the original is enough.
+    """
+    raw_metadata = None
+    if metadata_blob is not None:
+        try:
+            raw_metadata = await metadata_blob.read()
+        except Exception as e:
+            logger.warning(f"Could not read metadata_blob: {e}")
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        lambda: inspect_image_authenticity(contents, filename, raw_metadata),
+    )
+
+
+def _persist_authenticity(report: DBComplaint, authenticity: dict, image_hash: str = "") -> None:
+    """Attach forensic results to a report row."""
+    report.authenticity_verdict = authenticity.get("verdict")
+    report.authenticity_score = authenticity.get("authenticity_score")
+    try:
+        report.authenticity_signals = json.dumps(authenticity.get("signals", []))[:4000]
+    except (TypeError, ValueError):
+        report.authenticity_signals = None
+    if image_hash:
+        report.image_hash = image_hash
+
+
+def _collect_training_sample(db: Session, report: DBComplaint, contents: bytes,
+                             authenticity: dict, submitted_category: str,
+                             ai_prediction: str, confidence: str,
+                             user_corrected_category: str = None) -> dict:
+    """
+    Evaluate one report image as a training sample and record the decision.
+
+    The label is whichever the citizen actually chose. When that differs from
+    what the model predicted, it is a correction — the single most valuable kind
+    of label, because it marks a case the model got wrong.
+    """
+    predicted_class = dataset_collector.to_training_class(ai_prediction)
+    chosen_category = user_corrected_category or submitted_category
+    chosen_class = dataset_collector.to_training_class(chosen_category)
+    user_corrected = bool(chosen_class and predicted_class and chosen_class != predicted_class)
+
+    known = [
+        {"hash": h, "report_id": rid}
+        for h, rid in db.query(DBDatasetSample.image_hash, DBDatasetSample.report_id)
+                        .filter(DBDatasetSample.image_hash.isnot(None)).all()
+    ]
+
+    sample = dataset_collector.build_sample(
+        report_id=report.id,
+        image_bytes=contents,
+        class_label=chosen_category,
+        confidence=confidence,
+        authenticity=authenticity,
+        known_hashes=known,
+        user_corrected=user_corrected,
+    )
+
+    if sample["status"] == dataset_collector.STATUS_SKIPPED:
+        logger.info(f"Report {report.id} not collected: {sample['reason']}")
+        return {"status": sample["status"], "reason": sample["reason"]}
+
+    local_path = dataset_collector.save_sample_locally(sample)
+
+    # Buffer the prepared bytes only when a remote store is configured to
+    # receive them; otherwise the local file is the record.
+    blob = None
+    if dataset_store.is_configured() and sample.get("image_bytes"):
+        blob = base64.b64encode(sample["image_bytes"]).decode("ascii")
+
+    db.add(DBDatasetSample(
+        report_id=report.id,
+        image_hash=sample["image_hash"],
+        class_label=sample["class_label"],
+        confidence=sample["confidence"],
+        status=sample["status"],
+        reason=sample["reason"],
+        source=sample["source"],
+        authenticity_verdict=sample["authenticity_verdict"],
+        authenticity_score=sample["authenticity_score"],
+        image_path=local_path or None,
+        created_at=sample["created_at"],
+        pending_blob=blob,
+    ))
+    db.commit()
+
+    logger.info(
+        f"Report {report.id} collected as {sample['status']} "
+        f"({sample['class_label']}): {sample['reason']}"
+    )
+    return {
+        "status": sample["status"],
+        "reason": sample["reason"],
+        "class_label": sample["class_label"],
+    }
+
+
 def _safe_extension(filename: str) -> str:
     """Extract only the file extension; default to .jpg if absent/unsafe.
     
@@ -720,7 +926,22 @@ def _serialize(r: DBComplaint) -> dict:
         "completion_confidence":    r.completion_confidence,
         "resolved_at":              r.resolved_at,
         "upvotes":                  r.upvotes or 0,
+        "image_hash":               r.image_hash,
+        "authenticity_score":       r.authenticity_score,
+        "authenticity_verdict":     r.authenticity_verdict,
+        "authenticity_signals":     _load_signals(r.authenticity_signals),
     }
+
+
+def _load_signals(raw: str | None) -> list:
+    """Decode the stored JSON signal list; never let bad data break a report response."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except (ValueError, TypeError):
+        return []
 
 
 def _ai_inference_sync(contents: bytes) -> tuple[str, str, list[dict]]:
@@ -877,9 +1098,10 @@ def home():
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
+    metadata_blob: Optional[UploadFile] = File(None),
     _token: dict = Depends(require_token),
 ):
-    """Classify an uploaded image and return the predicted issue type."""
+    """Classify an uploaded image and assess whether it is a genuine camera capture."""
     try:
         contents = await _read_and_validate_file(file)
         # FIX B-3 + B-7: Use get_running_loop; run blocking inference in thread
@@ -888,9 +1110,16 @@ async def predict(
             None, lambda: _ai_inference_sync(contents)
         )
 
-        # Generate Grad-CAM image overlay for the top predicted class
+        authenticity = await _inspect_authenticity(
+            contents, metadata_blob, file.filename or "image.jpg"
+        )
+
+        # Grad-CAM only runs with a real Keras model; base_grad_model is None in
+        # the TFLite deployment, where _generate_gradcam_sync returns the input
+        # unchanged. Writing that copy to disk would litter uploads/ with a junk
+        # file on every single call, so skip it entirely when unavailable.
         gradcam_url = None
-        if pred_list:
+        if pred_list and base_grad_model is not None:
             top_class = pred_list[0]["issue_type"]
             gradcam_bytes = await loop.run_in_executor(
                 None, lambda: _generate_gradcam_sync(contents, top_class)
@@ -904,7 +1133,8 @@ async def predict(
             "issue_type": label_str,
             "confidence": confidence_str,
             "predictions": pred_list,
-            "gradcam_url": gradcam_url
+            "gradcam_url": gradcam_url,
+            "authenticity": authenticity,
         }
     except HTTPException:
         raise
@@ -1312,7 +1542,9 @@ async def create_report(
     categories:    str   = Form(..., max_length=512),
     ai_prediction: str   = Form(..., max_length=128),
     confidence:    str   = Form(..., max_length=32),
+    user_corrected_category: str = Form(None, max_length=128),
     file: UploadFile = File(...),
+    metadata_blob: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     _token: dict = Depends(require_token),
 ):
@@ -1352,6 +1584,12 @@ async def create_report(
             location=location,
             address=address,
         )
+        authenticity = await _inspect_authenticity(
+            contents, metadata_blob, file.filename or "image.jpg"
+        )
+        image_hash = dataset_collector.compute_image_hash(contents)
+        _persist_authenticity(new_report, authenticity, image_hash)
+
         db.add(new_report)
         db.commit()
         db.refresh(new_report)
@@ -1361,7 +1599,30 @@ async def create_report(
             db.add(DBIssue(complaintID=new_report.id, categoryID=cat_record.categoryID, count=1))
             db.commit()
 
-        return {"message": "Report submitted successfully", "id": new_report.id}
+        # Harvest the image as a training sample. Never let a collection failure
+        # break a citizen's submission — the report is the product, the dataset
+        # is a side effect.
+        sample_status = None
+        try:
+            sample_status = _collect_training_sample(
+                db=db,
+                report=new_report,
+                contents=contents,
+                authenticity=authenticity,
+                submitted_category=categories,
+                ai_prediction=ai_prediction,
+                confidence=confidence,
+                user_corrected_category=user_corrected_category,
+            )
+        except Exception as e:
+            logger.error(f"Dataset collection failed for report {new_report.id}: {e}")
+
+        return {
+            "message": "Report submitted successfully",
+            "id": new_report.id,
+            "authenticity": authenticity,
+            "dataset_status": sample_status,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1782,6 +2043,302 @@ def legacy_authority_resolve(
 ):
     """Alias for /resolve kept for backward compatibility."""
     return authority_resolve(report_id, req, db)
+
+
+# ─────────────────────────────────────────────────────────────
+#  ROUTES — AI DATASET REVIEW  (admin)
+#
+#  These MUST stay above the `GET /{catchall:path}` route below, which would
+#  otherwise shadow every GET registered after it.
+# ─────────────────────────────────────────────────────────────
+def _require_admin(token: dict) -> None:
+    if token.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+
+
+def _serialize_sample(s: DBDatasetSample) -> dict:
+    report = None
+    if s.report_id:
+        report = {"id": s.report_id}
+    return {
+        "id": s.id,
+        "report_id": s.report_id,
+        "report": report,
+        "image_hash": s.image_hash,
+        "class_label": s.class_label,
+        "confidence": s.confidence,
+        "status": s.status,
+        "reason": s.reason,
+        "source": s.source,
+        "authenticity_verdict": s.authenticity_verdict,
+        "authenticity_score": s.authenticity_score,
+        "image_path": s.image_path,
+        "github_path": s.github_path,
+        "synced": bool(s.synced),
+        "created_at": s.created_at,
+        "reviewed_by": s.reviewed_by,
+        "reviewed_at": s.reviewed_at,
+    }
+
+
+@app.get("/dataset/stats")
+def dataset_stats(
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Counts by status and class, plus the health of the class balance."""
+    _require_admin(_token)
+
+    rows = db.query(DBDatasetSample.status, func.count(DBDatasetSample.id)).group_by(
+        DBDatasetSample.status
+    ).all()
+    by_status = {status: count for status, count in rows}
+
+    class_rows = db.query(DBDatasetSample.class_label, func.count(DBDatasetSample.id)).filter(
+        DBDatasetSample.status == dataset_collector.STATUS_APPROVED
+    ).group_by(DBDatasetSample.class_label).all()
+    by_class = {label: count for label, count in class_rows if label}
+
+    # Must match the filter in /dataset/sync exactly, or the dashboard shows a
+    # backlog that syncing can never clear.
+    unsynced = db.query(func.count(DBDatasetSample.id)).filter(
+        DBDatasetSample.synced == 0,
+        DBDatasetSample.pending_blob.isnot(None),
+        DBDatasetSample.status.in_([
+            dataset_collector.STATUS_APPROVED, dataset_collector.STATUS_PENDING
+        ]),
+    ).scalar() or 0
+
+    return {
+        "by_status": by_status,
+        "by_class": by_class,
+        "total": sum(by_status.values()),
+        "unsynced": unsynced,
+        "auto_accept_threshold": dataset_collector.AUTO_ACCEPT_CONFIDENCE,
+        "storage_configured": dataset_store.is_configured(),
+        "local": dataset_collector.get_dataset_stats(),
+        "base_dataset": _base_dataset_counts(),
+    }
+
+
+def _base_dataset_counts() -> dict:
+    """Per-class image counts in the original ai_data/ training set, if present."""
+    counts = {}
+    base = BASE_DIR / "ai_data"
+    if not base.exists():
+        return counts
+    try:
+        for class_dir in base.iterdir():
+            if class_dir.is_dir():
+                counts[class_dir.name] = sum(1 for _ in class_dir.iterdir())
+    except Exception as e:
+        logger.warning(f"Could not count base dataset: {e}")
+    return counts
+
+
+@app.get("/dataset/samples")
+def dataset_samples(
+    status: str = "pending",
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """List collected samples, newest first. Defaults to the review queue."""
+    _require_admin(_token)
+
+    query = db.query(DBDatasetSample)
+    if status and status != "all":
+        query = query.filter(DBDatasetSample.status == status)
+
+    total = query.count()
+    rows = query.order_by(DBDatasetSample.id.desc()).offset(offset).limit(min(limit, 200)).all()
+
+    # Surface the report's stored photo so the reviewer can actually see it.
+    report_ids = [r.report_id for r in rows if r.report_id]
+    images = {}
+    if report_ids:
+        for rid, path in db.query(DBComplaint.id, DBComplaint.image_path).filter(
+            DBComplaint.id.in_(report_ids)
+        ).all():
+            images[rid] = path
+
+    payload = []
+    for row in rows:
+        item = _serialize_sample(row)
+        item["preview_url"] = images.get(row.report_id)
+        payload.append(item)
+
+    return {"total": total, "count": len(payload), "samples": payload}
+
+
+class SampleReview(BaseModel):
+    class_label: Optional[str] = None   # set to relabel while approving
+    note: Optional[str] = None
+
+
+@app.post("/dataset/{sample_id}/approve")
+def approve_sample(
+    sample_id: int,
+    review: SampleReview = SampleReview(),
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Accept a sample into the training pool, optionally correcting its label."""
+    _require_admin(_token)
+
+    sample = db.query(DBDatasetSample).filter(DBDatasetSample.id == sample_id).first()
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found.")
+
+    if review.class_label:
+        corrected = dataset_collector.to_training_class(review.class_label)
+        if not corrected:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{review.class_label}' is not a trainable class.",
+            )
+        sample.class_label = corrected
+        sample.source = dataset_collector.SOURCE_ADMIN
+
+    sample.status = dataset_collector.STATUS_APPROVED
+    sample.reason = review.note or "Approved by admin"
+    sample.reviewed_by = str(_token.get("username") or _token.get("sub"))
+    sample.reviewed_at = datetime.now(timezone.utc).isoformat()
+
+    # Retraining reads the filesystem, so the image has to physically move into
+    # the approved folder for this decision to have any effect.
+    sample.image_path = dataset_collector.relocate_sample_file(
+        sample.image_path, sample.status, sample.class_label
+    )
+    if sample.synced and dataset_store.is_configured():
+        dataset_store.move_sample(
+            {"image_hash": sample.image_hash, "class_label": sample.class_label,
+             "status": dataset_collector.STATUS_PENDING, "extension": ".jpg"},
+            dataset_collector.STATUS_APPROVED,
+        )
+    db.commit()
+
+    return {"message": "Sample approved", "sample": _serialize_sample(sample)}
+
+
+@app.post("/dataset/{sample_id}/reject")
+def reject_sample(
+    sample_id: int,
+    review: SampleReview = SampleReview(),
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """
+    Exclude a sample from training.
+
+    The row is kept rather than deleted so its hash still participates in
+    duplicate detection — otherwise the same rejected image would be re-queued
+    every time someone uploaded it again.
+    """
+    _require_admin(_token)
+
+    sample = db.query(DBDatasetSample).filter(DBDatasetSample.id == sample_id).first()
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found.")
+
+    sample.status = dataset_collector.STATUS_REJECTED
+    sample.reason = review.note or "Rejected by admin"
+    sample.reviewed_by = str(_token.get("username") or _token.get("sub"))
+    sample.reviewed_at = datetime.now(timezone.utc).isoformat()
+    sample.pending_blob = None   # never sync a rejected image
+
+    # Take the image out of the training tree entirely; the row stays so the
+    # hash keeps blocking re-submission.
+    dataset_collector.discard_sample_file(sample.image_path)
+    sample.image_path = None
+    db.commit()
+
+    return {"message": "Sample rejected", "sample": _serialize_sample(sample)}
+
+
+@app.post("/dataset/sync")
+def sync_dataset(
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Push buffered approved/pending samples to the dataset repo in one commit."""
+    _require_admin(_token)
+
+    if not dataset_store.is_configured():
+        return {
+            "status": "skipped",
+            "message": (
+                "Set GITHUB_TOKEN and DATASET_REPO to enable durable storage. "
+                "Samples are currently kept on local disk only, which does not "
+                "survive a redeploy on Vercel."
+            ),
+        }
+
+    rows = db.query(DBDatasetSample).filter(
+        DBDatasetSample.synced == 0,
+        DBDatasetSample.pending_blob.isnot(None),
+        DBDatasetSample.status.in_([
+            dataset_collector.STATUS_APPROVED, dataset_collector.STATUS_PENDING
+        ]),
+    ).order_by(DBDatasetSample.id).limit(dataset_store.SYNC_BATCH_SIZE).all()
+
+    if not rows:
+        return {"status": "skipped", "committed": 0, "message": "Nothing to sync."}
+
+    batch = []
+    for row in rows:
+        try:
+            image_bytes = base64.b64decode(row.pending_blob)
+        except Exception as e:
+            logger.error(f"Sample {row.id} has an unreadable buffer: {e}")
+            continue
+        batch.append({
+            "image_bytes": image_bytes,
+            "image_hash": row.image_hash,
+            "class_label": row.class_label,
+            "status": row.status,
+            "extension": ".jpg",
+            "report_id": row.report_id,
+            "confidence": row.confidence,
+            "source": row.source,
+            "authenticity_verdict": row.authenticity_verdict,
+            "authenticity_score": row.authenticity_score,
+            "created_at": row.created_at,
+        })
+
+    result = dataset_store.push_samples(batch)
+
+    if result.get("status") == "success":
+        by_hash = {b["image_hash"]: b for b in batch}
+        for row in rows:
+            if row.image_hash in by_hash:
+                row.synced = 1
+                row.github_path = dataset_store._sample_path(by_hash[row.image_hash])
+                row.pending_blob = None   # buffer served its purpose
+        db.commit()
+
+    return result
+
+
+@app.get("/reports/{report_id}/authenticity")
+def report_authenticity(
+    report_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Full forensic signal breakdown for one report's image."""
+    report = db.query(DBComplaint).filter(DBComplaint.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found.")
+
+    return {
+        "report_id": report.id,
+        "image_hash": report.image_hash,
+        "verdict": report.authenticity_verdict,
+        "authenticity_score": report.authenticity_score,
+        "signals": _load_signals(report.authenticity_signals),
+    }
 
 
 # ─────────────────────────────────────────────────────────────

@@ -17,5 +17,8 @@ mobile_frontend/.flutter-plugins-dependencies
 .DS_Store
 Thumbs.db
 
+# Local tooling config (machine-specific permissions and launch settings)
+.claude/
+
 # Project Temp Scripts
 mobile_frontend/*.py

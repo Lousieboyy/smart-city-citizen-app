@@ -18,3 +18,18 @@ download_data.py
 
 # Local uploads folder
 uploads/
+
+# Collected training samples.
+#
+# These are photographs taken by citizens — they can contain faces, vehicles and
+# the locations of people's homes. They belong in the private dataset repo that
+# dataset_store.py pushes to, never in application source control.
+dataset_feedback/
+dataset_feedback_index.jsonl
+dataset_repo/
+
+# Retraining working directories and artifacts
+ai_data_merged/
+ai_data_holdout/
+model_backup/
+retrain_metrics.json
