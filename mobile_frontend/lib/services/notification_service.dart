@@ -32,6 +32,16 @@ class NotificationService {
   Timer?              _timer;
   Map<int, String>    _lastKnownStatuses = {};
 
+  // Team-pool awareness (workers only): who's watching the same crew/agency
+  // pool. _poolInitialized guards the first poll after start/login so a
+  // worker isn't told every pre-existing pool job is "new".
+  Set<int> _lastKnownPoolIds = {};
+  bool     _poolInitialized  = false;
+  // Claims already announced to this worker, so a still-visible recent claim
+  // isn't re-notified every poll; entries fall out once the server's
+  // recent_claims window (and thus their presence here) expires.
+  Set<int> _notifiedClaimIds = {};
+
   final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
   bool _localNotifInitialized = false;
 
@@ -145,6 +155,9 @@ class NotificationService {
     _timer?.cancel();
     _timer = null;
     _lastKnownStatuses.clear();
+    _lastKnownPoolIds.clear();
+    _notifiedClaimIds.clear();
+    _poolInitialized = false;
     debugPrint('[NotificationService] Stopped');
   }
 
@@ -196,8 +209,83 @@ class NotificationService {
       } else {
         _lastKnownStatuses = currentStatuses;
       }
+
+      // Team pool awareness: only relevant to workers, and separate from the
+      // per-report diff above because a brand-new pool job is not a "status
+      // change" on anything this worker already knew about.
+      if (session.role.toLowerCase().contains('worker')) {
+        await _checkTeamPool();
+        await _checkRecentClaims();
+      }
     } catch (e) {
       debugPrint('[NotificationService] Poll error: $e');
+    }
+  }
+
+  /// Notify once per job when it first appears in this worker's team/crew
+  /// pool — this is "Ali and Abu get notified when Team A gets a job".
+  Future<void> _checkTeamPool() async {
+    try {
+      final response = await ApiService.getTeamPool();
+      if (response.statusCode != 200) return;
+
+      final data = jsonDecode(response.body) as List;
+      final currentIds = <int>{};
+
+      for (final report in data) {
+        final id = (report['id'] as int?) ?? -1;
+        currentIds.add(id);
+
+        if (_poolInitialized && !_lastKnownPoolIds.contains(id)) {
+          final cat = (report['categories'] as String?) ?? 'Report';
+          showLocalNotification(
+            id: 200000 + id,
+            title: "New Job in Your Team Pool",
+            body: "A '$cat' job is available — first to accept gets it.",
+          );
+          debugPrint('[NotificationService] New pool job #$id ($cat)');
+        }
+      }
+
+      _lastKnownPoolIds = currentIds;
+      _poolInitialized = true;
+    } catch (e) {
+      debugPrint('[NotificationService] Pool poll error: $e');
+    }
+  }
+
+  /// Notify the rest of the crew when a teammate claims a job, so it doesn't
+  /// just silently vanish from their pool with no explanation.
+  Future<void> _checkRecentClaims() async {
+    try {
+      final response = await ApiService.getRecentTeamClaims();
+      if (response.statusCode != 200) return;
+
+      final data = jsonDecode(response.body) as List;
+      final currentIds = <int>{};
+
+      for (final report in data) {
+        final id = (report['id'] as int?) ?? -1;
+        currentIds.add(id);
+
+        if (!_notifiedClaimIds.contains(id)) {
+          final cat    = (report['categories']      as String?) ?? 'Report';
+          final worker = (report['assigned_worker']  as String?) ?? 'A teammate';
+          showLocalNotification(
+            id: 300000 + id,
+            title: "Job Claimed",
+            body: "$worker accepted the '$cat' job.",
+          );
+          debugPrint('[NotificationService] Teammate claim #$id by $worker');
+        }
+      }
+
+      // Replacing rather than merging keeps this bounded: an id that ages out
+      // of the server's recent-claims window drops out here too, so if it
+      // were ever claimed again later it would correctly notify again.
+      _notifiedClaimIds = currentIds;
+    } catch (e) {
+      debugPrint('[NotificationService] Recent-claims poll error: $e');
     }
   }
 }

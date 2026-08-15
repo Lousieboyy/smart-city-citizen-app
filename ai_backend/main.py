@@ -177,6 +177,8 @@ class DBStaff(Base):
     phoneNumber = Column(String(32), nullable=True)
     role = Column(String(32), default="worker")  # worker | authority | admin
     agencyID = Column(Integer, ForeignKey("Agency.agencyID"), nullable=True)
+    crewID = Column(Integer, ForeignKey("Crew.id"), nullable=True)
+    on_leave = Column(Boolean, default=False)  # excluded from dispatch/claim while true
 
 
 class DBAgency(Base):
@@ -184,6 +186,22 @@ class DBAgency(Base):
     agencyID = Column(Integer, primary_key=True, index=True)
     name = Column(String(128), unique=True, nullable=False)
     address = Column(String(256), nullable=True)
+
+
+class DBCrew(Base):
+    """A named sub-team within one Agency, e.g. MBMB "Team A" vs "Team B".
+
+    A report can be dispatched to a crew instead of the whole agency pool —
+    only that crew's members see and can claim it. `status` lets an authority
+    take a whole crew offline (e.g. everyone on leave together) without
+    disbanding it or touching membership.
+    """
+    __tablename__ = "Crew"
+    id = Column(Integer, primary_key=True, index=True)
+    agencyID = Column(Integer, ForeignKey("Agency.agencyID"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    status = Column(String(16), default="active")  # active | disabled
+    created_at = Column(String(64), nullable=True)
 
 
 class DBCategory(Base):
@@ -229,7 +247,12 @@ class DBComplaint(Base):
     claimed_at = Column(String(64), nullable=True)      # left the pool
     release_count = Column(Integer, default=0)          # times bounced back; bottleneck signal
 
+    # Optional sub-team within the agency, e.g. MBMB "Team A" vs "Team B".
+    # NULL means the job is visible to the whole agency, not one crew.
+    assigned_crew_id = Column(Integer, ForeignKey("Crew.id"), nullable=True)
+
     assigned_agency = relationship("DBAgency", lazy="joined")
+    assigned_crew = relationship("DBCrew", lazy="joined")
 
     in_process_at = Column(String(64), nullable=True)
     in_maintenance_at = Column(String(64), nullable=True)
@@ -363,6 +386,12 @@ def _add_missing_columns():
             ("dispatched_at", "VARCHAR(64)"),
             ("claimed_at", "VARCHAR(64)"),
             ("release_count", "INTEGER DEFAULT 0"),
+            # Crews: sub-teams within an agency
+            ("assigned_crew_id", "INTEGER"),
+        ],
+        "Staff": [
+            ("crewID", "INTEGER"),
+            ("on_leave", "BOOLEAN DEFAULT FALSE"),
         ],
         "DatasetSample": [
             ("pending_blob", "TEXT"),
@@ -380,7 +409,11 @@ def _add_missing_columns():
                     continue
                 try:
                     with engine.begin() as conn:
-                        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {name} {sql_type}'))
+                        # Column name is quoted so mixed-case names like "crewID" keep
+                        # their exact case — unquoted DDL gets folded to lowercase by
+                        # Postgres, which then silently stops matching the ORM's
+                        # (quoted, case-preserving) column reference.
+                        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {sql_type}'))
                     print(f"[DB] Added column {table}.{name}")
                 except Exception as e:
                     print(f"[DB] Could not add column {table}.{name}: {e}")
@@ -1036,6 +1069,8 @@ def _serialize(r: DBComplaint) -> dict:
         "assigned_worker":          r.assigned_worker,
         "assigned_agency_id":       r.assigned_agency_id,
         "assigned_team":            r.assigned_agency.name if r.assigned_agency else None,
+        "assigned_crew_id":         r.assigned_crew_id,
+        "assigned_crew":            r.assigned_crew.name if r.assigned_crew else None,
         "assigned_worker_id":       r.assigned_worker_id,
         # NULL worker means the report is still sitting in the team's shared pool.
         "in_pool":                  r.assigned_agency_id is not None and r.assigned_worker_id is None,
@@ -1363,6 +1398,17 @@ def login(req: AuthRequest, db: Session = Depends(get_db)):
     }
 
 
+def _crew_visible_to(my_crew: Optional[int]):
+    """A worker sees agency-wide work (no crew set) regardless of their own
+    crew, plus their own crew's private pool if they have one. Crews are
+    additive scoping, not a hard partition — an un-crewed dispatch is still
+    "everyone's" work.
+    """
+    if my_crew:
+        return or_(DBComplaint.assigned_crew_id.is_(None), DBComplaint.assigned_crew_id == my_crew)
+    return DBComplaint.assigned_crew_id.is_(None)
+
+
 # ─────────────────────────────────────────────────────────────
 #  ROUTES — REPORTS
 # ─────────────────────────────────────────────────────────────
@@ -1389,9 +1435,12 @@ def get_reports(
     fuzzy-matching department text against the caller's username, which silently
     mis-scoped anyone whose username did not happen to contain their agency name.
 
-    `scope` narrows a worker's view so the client can render the two lists
-    separately without re-filtering:
+    `scope` narrows a worker's view so the client can render separate lists
+    without re-filtering client-side:
       mine → claimed by me    pool → unclaimed team pool    team → both (default)
+      recent_claims → teammates' claims in the last RECENT_CLAIM_WINDOW_MINUTES,
+        so the rest of the crew can be notified who just took a job instead of
+        it silently vanishing from their pool.
     """
     query = db.query(DBComplaint)
 
@@ -1413,17 +1462,42 @@ def get_reports(
     elif token_role == "worker":
         my_id = staff.id if staff else -1
         my_agency = staff.agencyID if staff else None
+        my_crew = staff.crewID if staff else None
+        on_leave = bool(staff.on_leave) if staff else False
 
         mine = DBComplaint.assigned_worker_id == my_id
-        pool = and_(
-            DBComplaint.assigned_agency_id == my_agency,
-            DBComplaint.assigned_worker_id.is_(None),
-        ) if my_agency else false()
+        if my_agency and not on_leave:
+            pool = and_(
+                DBComplaint.assigned_agency_id == my_agency,
+                DBComplaint.assigned_worker_id.is_(None),
+                _crew_visible_to(my_crew),
+            )
+        else:
+            # On leave: still see claimed work (to finish or release it), but no
+            # new pool items — nothing to notify them about while they're out.
+            pool = false()
 
         if scope == "mine":
             query = query.filter(mine)
         elif scope == "pool":
             query = query.filter(pool)
+        elif scope == "recent_claims":
+            if my_agency and not on_leave:
+                cutoff = (
+                    datetime.now(timezone.utc) - timedelta(minutes=RECENT_CLAIM_WINDOW_MINUTES)
+                ).isoformat()
+                # claimed_at is stored as an isoformat() string; all rows share
+                # the same fixed format and UTC offset, so string comparison
+                # sorts chronologically the same as a real timestamp would.
+                query = query.filter(
+                    DBComplaint.assigned_agency_id == my_agency,
+                    DBComplaint.assigned_worker_id.isnot(None),
+                    DBComplaint.assigned_worker_id != my_id,
+                    DBComplaint.claimed_at >= cutoff,
+                    _crew_visible_to(my_crew),
+                )
+            else:
+                query = query.filter(false())
         else:
             query = query.filter(or_(mine, pool))
 
@@ -1914,6 +1988,7 @@ def admin_reject(
 #  owns it. Statuses are unchanged — pool vs claimed is expressed by the FK.
 # ─────────────────────────────────────────────────────────────
 SLA_HOURS = int(os.getenv("DISPATCH_SLA_HOURS", "48"))
+RECENT_CLAIM_WINDOW_MINUTES = int(os.getenv("RECENT_CLAIM_WINDOW_MINUTES", "30"))
 
 
 def _current_staff(db: Session, token: dict) -> DBStaff:
@@ -2054,8 +2129,311 @@ def list_team_workers(
             "email": w.email,
             "phoneNumber": w.phoneNumber,
             "active_jobs": active,
+            "crew_id": w.crewID,
+            "on_leave": bool(w.on_leave),
         })
     return out
+
+
+# ─────────────────────────────────────────────────────────────
+#  CREWS — sub-teams within one agency, e.g. MBMB "Team A" vs "Team B"
+# ─────────────────────────────────────────────────────────────
+def _require_agency_owner(staff: DBStaff, agency_id: int) -> None:
+    """Admins manage any agency's crews; an authority only their own."""
+    if staff.role == "admin":
+        return
+    if staff.role != "authority" and not (staff.role or "").startswith("authority"):
+        raise HTTPException(status_code=403, detail="Only an authority or admin may manage crews.")
+    if staff.agencyID != agency_id:
+        raise HTTPException(status_code=403, detail="You can only manage your own team's crews.")
+
+
+def _serialize_crew(db: Session, crew: DBCrew) -> dict:
+    members = db.query(DBStaff).filter(DBStaff.crewID == crew.id).order_by(DBStaff.username).all()
+    open_statuses = ["In Process", "In Maintenance"]
+    member_list = []
+    for m in members:
+        active = db.query(func.count(DBComplaint.id)).filter(
+            DBComplaint.assigned_worker_id == m.id,
+            DBComplaint.status.in_(open_statuses),
+        ).scalar() or 0
+        member_list.append({
+            "id": m.id,
+            "username": m.username,
+            "email": m.email,
+            "phoneNumber": m.phoneNumber,
+            "on_leave": bool(m.on_leave),
+            "active_jobs": active,
+        })
+    return {
+        "id": crew.id,
+        "agency_id": crew.agencyID,
+        "name": crew.name,
+        "status": crew.status,
+        "created_at": crew.created_at,
+        "members": member_list,
+    }
+
+
+@app.get("/agencies/{agency_id}/crews")
+def list_crews(
+    agency_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """All crews in one agency, each with its member roster and load."""
+    staff = _current_staff(db, _token)
+    _require_agency_owner(staff, agency_id)
+    crews = db.query(DBCrew).filter(DBCrew.agencyID == agency_id).order_by(DBCrew.name).all()
+    return [_serialize_crew(db, c) for c in crews]
+
+
+class CrewCreateRequest(BaseModel):
+    name: str = Field(..., max_length=128)
+
+
+@app.post("/agencies/{agency_id}/crews")
+def create_crew(
+    agency_id: int,
+    req: CrewCreateRequest,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Create a new crew (e.g. "Team A") inside an agency."""
+    staff = _current_staff(db, _token)
+    _require_agency_owner(staff, agency_id)
+
+    agency = db.query(DBAgency).filter(DBAgency.agencyID == agency_id).first()
+    if not agency:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Crew name is required.")
+    dup = db.query(DBCrew).filter(DBCrew.agencyID == agency_id, DBCrew.name.ilike(name)).first()
+    if dup:
+        raise HTTPException(status_code=409, detail=f"A crew named '{name}' already exists in {agency.name}.")
+
+    crew = DBCrew(
+        agencyID=agency_id,
+        name=name,
+        status="active",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    db.add(crew)
+    db.commit()
+    db.refresh(crew)
+    return _serialize_crew(db, crew)
+
+
+class CrewUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=128)
+    status: Optional[str] = None  # active | disabled
+
+
+@app.patch("/crews/{crew_id}")
+def update_crew(
+    crew_id: int,
+    req: CrewUpdateRequest,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Rename a crew, or take it offline (disabled) — e.g. the whole crew on leave.
+
+    A disabled crew cannot receive new dispatches or claims, but jobs already
+    claimed by its members are left alone so in-progress work is not stranded.
+    """
+    staff = _current_staff(db, _token)
+    crew = db.query(DBCrew).filter(DBCrew.id == crew_id).first()
+    if not crew:
+        raise HTTPException(status_code=404, detail="Crew not found")
+    _require_agency_owner(staff, crew.agencyID)
+
+    if req.name is not None:
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Crew name cannot be empty.")
+        crew.name = name
+    if req.status is not None:
+        if req.status not in ("active", "disabled"):
+            raise HTTPException(status_code=400, detail="Status must be 'active' or 'disabled'.")
+        crew.status = req.status
+
+    db.commit()
+    db.refresh(crew)
+    return _serialize_crew(db, crew)
+
+
+class CrewMemberRequest(BaseModel):
+    staff_id: int
+
+
+@app.post("/crews/{crew_id}/members")
+def add_crew_member(
+    crew_id: int,
+    req: CrewMemberRequest,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Add a worker to a crew. A worker can only be on one crew at a time —
+    adding them here moves them out of any crew they were already on."""
+    staff = _current_staff(db, _token)
+    crew = db.query(DBCrew).filter(DBCrew.id == crew_id).first()
+    if not crew:
+        raise HTTPException(status_code=404, detail="Crew not found")
+    _require_agency_owner(staff, crew.agencyID)
+
+    worker = db.query(DBStaff).filter(DBStaff.id == req.staff_id, DBStaff.role == "worker").first()
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    if worker.agencyID != crew.agencyID:
+        raise HTTPException(status_code=400, detail=f"{worker.username} is not a member of this team.")
+
+    worker.crewID = crew.id
+    db.commit()
+    return _serialize_crew(db, crew)
+
+
+@app.delete("/crews/{crew_id}/members/{staff_id}")
+def remove_crew_member(
+    crew_id: int,
+    staff_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Remove a worker from a crew — they fall back to the agency-wide pool."""
+    staff = _current_staff(db, _token)
+    crew = db.query(DBCrew).filter(DBCrew.id == crew_id).first()
+    if not crew:
+        raise HTTPException(status_code=404, detail="Crew not found")
+    _require_agency_owner(staff, crew.agencyID)
+
+    worker = db.query(DBStaff).filter(DBStaff.id == staff_id, DBStaff.crewID == crew.id).first()
+    if not worker:
+        raise HTTPException(status_code=404, detail="This worker is not on that crew.")
+    worker.crewID = None
+    db.commit()
+    return _serialize_crew(db, crew)
+
+
+class LeaveRequest(BaseModel):
+    on_leave: bool
+
+
+@app.patch("/staff/{staff_id}/leave")
+def set_staff_leave(
+    staff_id: int,
+    req: LeaveRequest,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Toggle one worker's on-leave flag.
+
+    While on leave, a worker drops out of dispatch/pin pickers and stops
+    seeing new pool work, but keeps whatever they already claimed so they can
+    finish or release it before going offline.
+    """
+    staff = _current_staff(db, _token)
+    worker = db.query(DBStaff).filter(DBStaff.id == staff_id, DBStaff.role == "worker").first()
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    _require_agency_owner(staff, worker.agencyID)
+
+    worker.on_leave = req.on_leave
+    db.commit()
+    return {"id": worker.id, "username": worker.username, "on_leave": bool(worker.on_leave)}
+
+
+@app.get("/agencies/{agency_id}/crews/workload")
+def crew_workload(
+    agency_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Per-crew load, capacity, ageing and throughput within one agency.
+
+    Mirrors /teams/workload one level down, so an authority can see which of
+    their own crews is drowning and which has room, not just the agency total.
+    A final "Unassigned" row covers work dispatched agency-wide, no crew set.
+    """
+    staff = _current_staff(db, _token)
+    _require_agency_owner(staff, agency_id)
+
+    now = datetime.now(timezone.utc)
+    week_ago = now - timedelta(days=7)
+    open_statuses = ["In Process", "In Maintenance"]
+
+    def stats_for(crew_id: Optional[int], label: str, crew_status: str) -> dict:
+        crew_cond = (
+            DBComplaint.assigned_crew_id == crew_id if crew_id is not None
+            else DBComplaint.assigned_crew_id.is_(None)
+        )
+        open_reports = db.query(DBComplaint).filter(
+            DBComplaint.assigned_agency_id == agency_id,
+            crew_cond,
+            DBComplaint.status.in_(open_statuses),
+        ).all()
+        unclaimed = [r for r in open_reports if r.assigned_worker_id is None]
+        claimed = [r for r in open_reports if r.assigned_worker_id is not None]
+
+        worker_cond = (
+            DBStaff.crewID == crew_id if crew_id is not None
+            else and_(DBStaff.agencyID == agency_id, DBStaff.crewID.is_(None))
+        )
+        active_workers = db.query(func.count(DBStaff.id)).filter(
+            worker_cond, DBStaff.role == "worker", DBStaff.on_leave.isnot(True),
+        ).scalar() or 0
+        on_leave_count = db.query(func.count(DBStaff.id)).filter(
+            worker_cond, DBStaff.role == "worker", DBStaff.on_leave.is_(True),
+        ).scalar() or 0
+
+        ages = [
+            (now - ts).total_seconds() / 3600.0
+            for ts in (_parse_ts(r.dispatched_at or r.in_process_at) for r in unclaimed)
+            if ts is not None
+        ]
+        oldest_hours = round(max(ages), 1) if ages else 0.0
+        breached = sum(1 for a in ages if a > SLA_HOURS)
+
+        completed_7d = sum(
+            1 for r in db.query(DBComplaint).filter(
+                DBComplaint.assigned_agency_id == agency_id,
+                crew_cond,
+                DBComplaint.status == "Resolved",
+            ).all()
+            if (ts := _parse_ts(r.resolved_at)) and ts >= week_ago
+        )
+
+        load_per_worker = round(len(open_reports) / active_workers, 2) if active_workers else None
+        strain = 0
+        if load_per_worker is None and open_reports:
+            strain += 2
+        elif load_per_worker is not None and load_per_worker >= 5:
+            strain += 2 if load_per_worker >= 8 else 1
+        if breached:
+            strain += 2 if breached >= 3 else 1
+        derived_status = "bottleneck" if strain >= 3 else "strained" if strain >= 1 else "healthy"
+
+        return {
+            "id": crew_id,
+            "name": label,
+            "status": crew_status,
+            "derived_status": derived_status,
+            "open_count": len(open_reports),
+            "unclaimed_count": len(unclaimed),
+            "claimed_count": len(claimed),
+            "worker_count": active_workers,
+            "on_leave_count": on_leave_count,
+            "load_per_worker": load_per_worker,
+            "oldest_unclaimed_hours": oldest_hours,
+            "sla_breached_count": breached,
+            "completed_7d": completed_7d,
+        }
+
+    crews = db.query(DBCrew).filter(DBCrew.agencyID == agency_id).order_by(DBCrew.name).all()
+    out = [stats_for(c.id, c.name, c.status) for c in crews]
+    out.append(stats_for(None, "Unassigned", "active"))
+    return {"sla_hours": SLA_HOURS, "crews": out}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2063,6 +2441,7 @@ def list_team_workers(
 # ─────────────────────────────────────────────────────────────
 class DispatchRequest(BaseModel):
     agency_id: int
+    crew_id: Optional[int] = None     # optional: scope to one crew's pool
     worker_id: Optional[int] = None   # optional pin; omit to leave in the pool
     note: str = Field("", max_length=1000)
 
@@ -2074,7 +2453,8 @@ def dispatch_to_team(
     db: Session = Depends(get_db),
     _token: dict = Depends(require_token),
 ):
-    """Send a report to a team's shared pool, optionally pinned to one worker."""
+    """Send a report to a team (or one crew's) shared pool, optionally pinned
+    to one worker."""
     staff = _current_staff(db, _token)
     report = _get_report_or_404(db, report_id)
     _require_team_access(staff, report)
@@ -2082,6 +2462,16 @@ def dispatch_to_team(
     agency = db.query(DBAgency).filter(DBAgency.agencyID == req.agency_id).first()
     if not agency:
         raise HTTPException(status_code=404, detail="Team not found")
+
+    crew = None
+    if req.crew_id is not None:
+        crew = db.query(DBCrew).filter(DBCrew.id == req.crew_id).first()
+        if not crew:
+            raise HTTPException(status_code=404, detail="Crew not found")
+        if crew.agencyID != agency.agencyID:
+            raise HTTPException(status_code=400, detail=f"{crew.name} is not part of {agency.name}.")
+        if crew.status == "disabled":
+            raise HTTPException(status_code=400, detail=f"{crew.name} is currently disabled.")
 
     pinned = None
     if req.worker_id is not None:
@@ -2095,11 +2485,16 @@ def dispatch_to_team(
                 status_code=400,
                 detail=f"{pinned.username} is not a member of {agency.name}.",
             )
+        if crew and pinned.crewID != crew.id:
+            raise HTTPException(status_code=400, detail=f"{pinned.username} is not on {crew.name}.")
+        if pinned.on_leave:
+            raise HTTPException(status_code=400, detail=f"{pinned.username} is currently on leave.")
 
     now = datetime.now(timezone.utc).isoformat()
     report.status = "In Process"
     report.assigned_agency_id = agency.agencyID
     report.assigned_department = agency.name
+    report.assigned_crew_id = crew.id if crew else None
     report.dispatched_at = now
     report.in_process_at = now
     report.assigned_worker_id = pinned.id if pinned else None
@@ -2111,7 +2506,12 @@ def dispatch_to_team(
         sep = "\n" if existing else ""
         report.authority_notes = existing + sep + f"[Authority] {req.note}"
 
-    target = f"{agency.name} pool" if not pinned else f"{pinned.username} ({agency.name})"
+    if pinned:
+        target = f"{pinned.username} ({agency.name})"
+    elif crew:
+        target = f"{crew.name} pool ({agency.name})"
+    else:
+        target = f"{agency.name} pool"
     _log_action(db, staff, report, "In Process", f"Dispatched to {target}. {req.note}".strip())
 
     db.commit()
@@ -2155,6 +2555,7 @@ def authority_assign(
 
     if worker:
         report.assigned_worker_id = worker.id
+        report.assigned_crew_id = worker.crewID
         report.claimed_at = now
         if worker.agencyID:
             report.assigned_agency_id = worker.agencyID
@@ -2198,10 +2599,18 @@ def claim_report(
         raise HTTPException(status_code=403, detail="Only workers can claim tasks.")
     if not staff.agencyID:
         raise HTTPException(status_code=400, detail="You are not assigned to a team yet.")
+    if staff.on_leave:
+        raise HTTPException(status_code=400, detail="You're marked on leave — ask your authority to update that first.")
 
     report = _get_report_or_404(db, report_id)
     if report.assigned_agency_id != staff.agencyID:
         raise HTTPException(status_code=403, detail="This task belongs to another team.")
+    if report.assigned_crew_id and report.assigned_crew_id != staff.crewID:
+        raise HTTPException(status_code=403, detail="This task belongs to another crew.")
+    if report.assigned_crew_id:
+        crew = db.query(DBCrew).filter(DBCrew.id == report.assigned_crew_id).first()
+        if crew and crew.status == "disabled":
+            raise HTTPException(status_code=403, detail=f"{crew.name} is currently disabled.")
 
     now = datetime.now(timezone.utc).isoformat()
     updated = (
@@ -2286,6 +2695,79 @@ def release_report(
 
 
 # ─────────────────────────────────────────────────────────────
+#  WITHIN-AGENCY REBALANCE — move a report between crews (or the general
+#  pool) without leaving the agency. No approval needed, unlike a cross-team
+#  transfer: it's the authority watching their own crews and rebalancing.
+# ─────────────────────────────────────────────────────────────
+class ReassignCrewRequest(BaseModel):
+    crew_id: Optional[int] = None  # None = move to the agency-wide general pool
+    note: str = Field("", max_length=1000)
+
+
+@app.post("/reports/{report_id}/reassign-crew")
+def reassign_crew(
+    report_id: int,
+    req: ReassignCrewRequest,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Move a report to a different crew (or back to the general pool) within
+    the same agency — for rebalancing when one crew is overloaded."""
+    staff = _current_staff(db, _token)
+    report = _get_report_or_404(db, report_id)
+    _require_team_access(staff, report)
+
+    if report.status in ("Resolved", "Rejected"):
+        raise HTTPException(status_code=400, detail="This report is already closed.")
+
+    crew = None
+    if req.crew_id is not None:
+        crew = db.query(DBCrew).filter(DBCrew.id == req.crew_id).first()
+        if not crew:
+            raise HTTPException(status_code=404, detail="Crew not found")
+        if crew.agencyID != report.assigned_agency_id:
+            raise HTTPException(status_code=400, detail=f"{crew.name} is not part of this team.")
+        if crew.status == "disabled":
+            raise HTTPException(status_code=400, detail=f"{crew.name} is currently disabled.")
+    if crew and crew.id == report.assigned_crew_id:
+        raise HTTPException(status_code=400, detail=f"This report is already with {crew.name}.")
+    if crew is None and report.assigned_crew_id is None:
+        raise HTTPException(status_code=400, detail="This report is already in the general pool.")
+
+    old_crew = (
+        db.query(DBCrew).filter(DBCrew.id == report.assigned_crew_id).first()
+        if report.assigned_crew_id else None
+    )
+
+    # If the current claimant isn't on the destination crew, the whole point of
+    # rebalancing is to put it in front of people who actually can pick it up —
+    # so drop the claim and let it land unclaimed in the new crew's pool.
+    if report.assigned_worker_id and crew:
+        claimant = db.query(DBStaff).filter(DBStaff.id == report.assigned_worker_id).first()
+        if not claimant or claimant.crewID != crew.id:
+            report.assigned_worker_id = None
+            report.assigned_worker = None
+            report.claimed_at = None
+            report.status = "In Process"
+            report.in_maintenance_at = None
+
+    report.assigned_crew_id = crew.id if crew else None
+    report.dispatched_at = datetime.now(timezone.utc).isoformat()
+
+    old_name = old_crew.name if old_crew else "the general pool"
+    new_name = crew.name if crew else "the general pool"
+    if req.note:
+        existing = report.authority_notes or ""
+        sep = "\n" if existing else ""
+        report.authority_notes = existing + sep + f"[Reassigned {old_name} → {new_name}] {req.note}"
+    _log_action(db, staff, report, report.status, f"Reassigned {old_name} → {new_name}. {req.note}".strip())
+
+    db.commit()
+    db.refresh(report)
+    return _serialize(report)
+
+
+# ─────────────────────────────────────────────────────────────
 #  CROSS-TEAM HANDOVER
 #
 #  Two routes, deliberately: a team can *ask* to be relieved of a job
@@ -2301,6 +2783,7 @@ def _move_report_to_team(
 
     report.assigned_agency_id = target.agencyID
     report.assigned_department = target.name
+    report.assigned_crew_id = None  # crews don't span agencies
     report.assigned_worker_id = None
     report.assigned_worker = None
     report.claimed_at = None

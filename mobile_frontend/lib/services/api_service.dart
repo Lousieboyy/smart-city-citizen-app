@@ -103,6 +103,12 @@ class ApiService {
     return getReports(role: 'worker', scope: 'pool', limit: limit);
   }
 
+  /// Jobs a teammate (same agency, same crew if any) claimed recently — the
+  /// signal that turns "it silently vanished from my pool" into "Ali took it".
+  static Future<http.Response> getRecentTeamClaims({int limit = 20}) {
+    return getReports(role: 'worker', scope: 'recent_claims', limit: limit);
+  }
+
   /// Claim a job from the team pool.
   ///
   /// A **409** means another worker claimed it first — callers should refresh
