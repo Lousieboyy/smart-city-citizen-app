@@ -2139,24 +2139,18 @@ def list_team_workers(
 #  CREWS — sub-teams within one agency, e.g. MBMB "Team A" vs "Team B"
 # ─────────────────────────────────────────────────────────────
 def _require_agency_owner(staff: DBStaff, agency_id: int) -> None:
-    """Read access to one agency's crews: admin, or that agency's own
-    authority — an authority still needs this to populate the crew picker
-    when dispatching, even though crew *management* is admin-only."""
+    """Admins manage any agency's crews; an authority only their own — this
+    is the day-to-day crew management path (create/rename/disable, members,
+    leave), so it stays with the authority rather than becoming a bottleneck
+    on admin for every agency."""
     if staff.role == "admin":
         return
     if staff.role != "authority" and not (staff.role or "").startswith("authority"):
-        raise HTTPException(status_code=403, detail="Only an authority or admin may view crews.")
+        raise HTTPException(status_code=403, detail="Only an authority or admin may manage crews.")
     if staff.agencyID != agency_id:
-        raise HTTPException(status_code=403, detail="You can only view your own team's crews.")
+        raise HTTPException(status_code=403, detail="You can only manage your own team's crews.")
 
 
-def _require_admin_staff(staff: DBStaff) -> None:
-    """Crew *management* — create/rename/disable, membership, leave — is
-    admin-only. An authority can still dispatch to a crew (list_crews stays
-    open to them); they just can't set crews up or edit membership anymore.
-    """
-    if staff.role != "admin":
-        raise HTTPException(status_code=403, detail="Only an admin may manage crews.")
 
 
 def _serialize_crew(db: Session, crew: DBCrew) -> dict:
@@ -2212,7 +2206,7 @@ def create_crew(
 ):
     """Create a new crew (e.g. "Team A") inside an agency."""
     staff = _current_staff(db, _token)
-    _require_admin_staff(staff)
+    _require_agency_owner(staff, agency_id)
 
     agency = db.query(DBAgency).filter(DBAgency.agencyID == agency_id).first()
     if not agency:
@@ -2258,7 +2252,7 @@ def update_crew(
     crew = db.query(DBCrew).filter(DBCrew.id == crew_id).first()
     if not crew:
         raise HTTPException(status_code=404, detail="Crew not found")
-    _require_admin_staff(staff)
+    _require_agency_owner(staff, crew.agencyID)
 
     if req.name is not None:
         name = req.name.strip()
@@ -2292,7 +2286,7 @@ def add_crew_member(
     crew = db.query(DBCrew).filter(DBCrew.id == crew_id).first()
     if not crew:
         raise HTTPException(status_code=404, detail="Crew not found")
-    _require_admin_staff(staff)
+    _require_agency_owner(staff, crew.agencyID)
 
     worker = db.query(DBStaff).filter(DBStaff.id == req.staff_id, DBStaff.role == "worker").first()
     if not worker:
@@ -2317,7 +2311,7 @@ def remove_crew_member(
     crew = db.query(DBCrew).filter(DBCrew.id == crew_id).first()
     if not crew:
         raise HTTPException(status_code=404, detail="Crew not found")
-    _require_admin_staff(staff)
+    _require_agency_owner(staff, crew.agencyID)
 
     worker = db.query(DBStaff).filter(DBStaff.id == staff_id, DBStaff.crewID == crew.id).first()
     if not worker:
@@ -2348,7 +2342,7 @@ def set_staff_leave(
     worker = db.query(DBStaff).filter(DBStaff.id == staff_id, DBStaff.role == "worker").first()
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
-    _require_admin_staff(staff)
+    _require_agency_owner(staff, worker.agencyID)
 
     worker.on_leave = req.on_leave
     db.commit()
@@ -2363,12 +2357,13 @@ def crew_workload(
 ):
     """Per-crew load, capacity, ageing and throughput within one agency.
 
-    Mirrors /teams/workload one level down, admin-only like the rest of crew
-    management. A final "Unassigned" row covers work dispatched agency-wide,
-    no crew set.
+    Mirrors /teams/workload one level down, so an authority can see which of
+    their own crews is drowning and which has room, not just the agency
+    total. A final "Unassigned" row covers work dispatched agency-wide, no
+    crew set.
     """
     staff = _current_staff(db, _token)
-    _require_admin_staff(staff)
+    _require_agency_owner(staff, agency_id)
 
     now = datetime.now(timezone.utc)
     week_ago = now - timedelta(days=7)
@@ -3042,12 +3037,13 @@ def team_workload(db: Session = Depends(get_db), _token: dict = Depends(require_
     """Per-team load, capacity, ageing and throughput — the bottleneck board.
 
     Returns a derived status per team so the web panel and the app colour-code
-    from one place instead of each re-deriving the thresholds. Cross-agency
-    comparison is admin-only — an authority manages their own team by
-    dispatching, not by comparing load against other agencies.
+    from one place instead of each re-deriving the thresholds. Open to any
+    authority (not just admin) — comparing load across agencies is what lets
+    an authority judge where to send a transfer request.
     """
     staff = _current_staff(db, _token)
-    _require_admin_staff(staff)
+    if staff.role == "worker":
+        raise HTTPException(status_code=403, detail="Only an authority or admin may view team workload.")
 
     now = datetime.now(timezone.utc)
     week_ago = now - timedelta(days=7)
