@@ -1352,6 +1352,17 @@ class _DashboardContentState extends State<DashboardContent> {
   }
 
   /// An unclaimed job in the team pool, with an Accept button.
+  /// Compact "agency crew" tag, e.g. "mbmb TeamA" — agency lowercase, crew
+  /// name with spaces stripped so the two read as one short label. Null when
+  /// the report has no team yet (still Pending / In Review).
+  String? _teamCrewTag(Map<String, dynamic> item) {
+    final team = (item['assigned_team'] as String?)?.trim();
+    if (team == null || team.isEmpty) return null;
+    final crew = (item['assigned_crew'] as String?)?.trim();
+    if (crew == null || crew.isEmpty) return team.toLowerCase();
+    return '${team.toLowerCase()} ${crew.replaceAll(' ', '')}';
+  }
+
   Widget _buildPoolCard(Map<String, dynamic> item) {
     final cat = (item['categories'] ?? 'Uncategorized').toString();
     final location =
@@ -1359,6 +1370,7 @@ class _DashboardContentState extends State<DashboardContent> {
     final id = item['id'] as int?;
     final busy = _claimingId == id;
     final releaseCount = item['release_count'] is int ? item['release_count'] as int : 0;
+    final teamTag = _teamCrewTag(item);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1392,14 +1404,24 @@ class _DashboardContentState extends State<DashboardContent> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        cat,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: PixelTheme.pixelBody(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              cat,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: PixelTheme.pixelBody(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          if (teamTag != null) ...[
+                            const SizedBox(width: 6),
+                            PixelBadge(text: teamTag, color: PixelTheme.accentCyan),
+                          ],
+                        ],
                       ),
                       const SizedBox(height: 2),
                       Text(
@@ -1537,6 +1559,8 @@ class _DashboardContentState extends State<DashboardContent> {
                     children: [
                       PixelBadge(text: trStatus(status), color: cfg.color),
                       PixelBadge(text: tr('priority_${priority.label}'), color: priority.color),
+                      if (_teamCrewTag(item) != null)
+                        PixelBadge(text: _teamCrewTag(item)!, color: PixelTheme.accentCyan),
                       if (upvotes > 0)
                         PixelBadge(text: '▲ ${trCount('common_confirmed_count', upvotes)}', color: PixelTheme.accentCyan),
                     ],
