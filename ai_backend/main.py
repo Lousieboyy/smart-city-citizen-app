@@ -3685,6 +3685,70 @@ def report_authenticity(
     }
 
 
+# NOTE: this must stay above the `GET /{catchall:path}` route below, which
+# matches everything. FastAPI resolves in registration order.
+@app.get("/reports/actions")
+def list_authority_actions(
+    report_id: Optional[int] = None,
+    since: Optional[str] = None,
+    limit: int = 1000,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Workflow audit trail — one row per authority action.
+
+    Every workflow step already writes an AuthorityAction row, but nothing has
+    ever read them back. Exposing them lets the analytics reconstruct true
+    time-in-state and full rework chains: the scalar timestamps on a report are
+    reset by release, reassign and transfer, so a bounced report otherwise shows
+    only its final cycle.
+
+    Scoped like /transfers: admins see everything, an authority sees only its own
+    team's reports, workers are refused. Scoping keys off the JWT, never a query
+    parameter.
+    """
+    staff = _current_staff(db, _token)
+    if staff.role == "worker":
+        raise HTTPException(
+            status_code=403,
+            detail="Only an authority or admin may read the audit trail.",
+        )
+
+    # Joined to Complaint because AuthorityAction carries no agency of its own.
+    query = db.query(DBAuthorityAction).join(
+        DBComplaint, DBComplaint.id == DBAuthorityAction.complaintID
+    )
+    if staff.role != "admin":
+        query = query.filter(DBComplaint.assigned_agency_id == staff.agencyID)
+    if report_id is not None:
+        query = query.filter(DBAuthorityAction.complaintID == report_id)
+    if since:
+        try:
+            query = query.filter(DBAuthorityAction.actionDate >= datetime.fromisoformat(since))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="`since` must be an ISO datetime.")
+
+    rows = (
+        query.order_by(DBAuthorityAction.actionDate.asc())
+        .limit(max(1, min(limit, 5000)))
+        .all()
+    )
+
+    return [
+        {
+            "id": a.authorityID,
+            "report_id": a.complaintID,
+            "status": a.status,
+            "remarks": a.remarks,
+            "staff_id": a.staffID,
+            "action_date": a.actionDate.isoformat()
+            if hasattr(a.actionDate, "isoformat")
+            else a.actionDate,
+        }
+        for a in rows
+    ]
+
+
 # ─────────────────────────────────────────────────────────────
 #  API PREFIX ROUTING & STATIC WEB FRONTEND
 # ─────────────────────────────────────────────────────────────
