@@ -2591,7 +2591,11 @@ def authority_assign(
 
     report.status = "In Process"
     report.assigned_worker = req.worker_name
-    report.in_process_at = now
+    # Both stamps are first-set-wins. Overwriting in_process_at while preserving
+    # dispatched_at (the previous behaviour) inverted the pair for any report
+    # dispatched before being assigned through this legacy path, yielding a
+    # negative dispatched_at - in_process_at interval in stage-duration analytics.
+    report.in_process_at = report.in_process_at or now
     report.dispatched_at = report.dispatched_at or now
 
     if worker:
