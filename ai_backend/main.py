@@ -2269,6 +2269,41 @@ def update_crew(
     return _serialize_crew(db, crew)
 
 
+@app.delete("/crews/{crew_id}")
+def delete_crew(
+    crew_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Permanently remove an empty crew.
+
+    Blocked while it still has members — remove everyone first, so nobody's
+    membership disappears silently as a side effect of deleting the crew.
+    Reports that reference this crew (open or historical) are not blocked or
+    orphaned: their assigned_crew_id is cleared, so they simply read as
+    agency-wide work going forward, same as a crew that was never set.
+    """
+    staff = _current_staff(db, _token)
+    crew = db.query(DBCrew).filter(DBCrew.id == crew_id).first()
+    if not crew:
+        raise HTTPException(status_code=404, detail="Crew not found")
+    _require_agency_owner(staff, crew.agencyID)
+
+    member_count = db.query(func.count(DBStaff.id)).filter(DBStaff.crewID == crew.id).scalar() or 0
+    if member_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Remove all {member_count} member(s) from {crew.name} before deleting it.",
+        )
+
+    db.query(DBComplaint).filter(DBComplaint.assigned_crew_id == crew.id).update(
+        {"assigned_crew_id": None}, synchronize_session=False
+    )
+    db.delete(crew)
+    db.commit()
+    return {"deleted": True, "id": crew_id}
+
+
 class CrewMemberRequest(BaseModel):
     staff_id: int
 
