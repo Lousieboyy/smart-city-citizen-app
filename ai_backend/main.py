@@ -2046,24 +2046,49 @@ def _get_report_or_404(db: Session, report_id: int) -> DBComplaint:
     return report
 
 
-def _require_claimant(staff: DBStaff, report: DBComplaint) -> None:
-    """Only the worker holding the job may progress it (admins exempt).
+def _require_crew_member(db: Session, staff: DBStaff, report: DBComplaint) -> None:
+    """Anyone on the crew holding the job may progress it (admins exempt).
 
-    Previously start-maintenance and complete-task checked nothing beyond a
-    valid token, so any staff account could start or complete anyone's job.
+    Work dispatched to a crew is shared by that crew: teammates coordinate
+    between themselves rather than racing to claim it, and a job is never
+    blocked because the one worker who tapped Accept first is unavailable.
+
+    Crews remain a hard boundary in the other direction — Team B cannot touch
+    Team A's work — and a crew-less dispatch stays open to the whole agency,
+    matching the visibility rules in _crew_visible_to.
     """
     if staff.role == "admin":
         return
-    if report.assigned_worker_id is None:
+    if staff.role != "worker":
+        raise HTTPException(status_code=403, detail="Only workers can carry out tasks.")
+    if not staff.agencyID or report.assigned_agency_id != staff.agencyID:
+        raise HTTPException(status_code=403, detail="This task belongs to another team.")
+    if report.assigned_crew_id and report.assigned_crew_id != staff.crewID:
+        raise HTTPException(status_code=403, detail="This task belongs to another crew.")
+    if staff.on_leave:
         raise HTTPException(
-            status_code=403,
-            detail="Claim this task from your team pool before working on it.",
+            status_code=400,
+            detail="You're marked on leave — ask your authority to update that first.",
         )
-    if report.assigned_worker_id != staff.id:
-        raise HTTPException(
-            status_code=403,
-            detail="This task is assigned to another worker.",
-        )
+    if report.assigned_crew_id:
+        crew = db.query(DBCrew).filter(DBCrew.id == report.assigned_crew_id).first()
+        if crew and crew.status == "disabled":
+            raise HTTPException(status_code=403, detail=f"{crew.name} is currently disabled.")
+
+
+def _adopt_if_unclaimed(staff: DBStaff, report: DBComplaint) -> None:
+    """Record the first teammate to actually start work as the handler.
+
+    Claiming is no longer a gate, so nobody has to tap Accept before working.
+    Stamping the handler here anyway keeps claimed_at populated, which the pool
+    wait and mobilisation stages of the analytics measure, and leaves a record of
+    who did the job.
+    """
+    if staff.role != "worker" or report.assigned_worker_id is not None:
+        return
+    report.assigned_worker_id = staff.id
+    report.assigned_worker = staff.username
+    report.claimed_at = datetime.now(timezone.utc).isoformat()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2675,11 +2700,13 @@ def claim_report(
         )
     )
     if updated == 0:
+        # A teammate got there first. That is no longer a failure: crew work is
+        # shared, so this worker can still open, start and finish the job. Return
+        # the report as-is rather than a 409, which used to read as "you lost the
+        # race" and left the loser with nothing to do.
         db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="This task was already claimed by another worker.",
-        )
+        db.refresh(report)
+        return _serialize(report)
 
     db.refresh(report)
     _log_action(db, staff, report, report.status, f"Claimed from {report.assigned_department} pool")
@@ -3180,10 +3207,15 @@ def start_maintenance(
     db: Session = Depends(get_db),
     _token: dict = Depends(require_token),
 ):
-    """Worker starts maintenance on an In Process report (→ In Maintenance)."""
+    """Worker starts maintenance on an In Process report (→ In Maintenance).
+
+    Any member of the holding crew may start; whoever does becomes the recorded
+    handler if nobody had accepted it yet.
+    """
     staff = _current_staff(db, _token)
     report = _get_report_or_404(db, report_id)
-    _require_claimant(staff, report)
+    _require_crew_member(db, staff, report)
+    _adopt_if_unclaimed(staff, report)
     report.status = "In Maintenance"
     report.in_maintenance_at = datetime.now(timezone.utc).isoformat()
 
@@ -3203,10 +3235,16 @@ async def complete_task(
     db: Session = Depends(get_db),
     _token: dict = Depends(require_token),
 ):
-    """Worker submits completion proof (photo + notes)."""
+    """Worker submits completion proof (photo + notes).
+
+    Shared across the crew: a teammate can finish and submit for a job another
+    member started, which is the point of dispatching to a crew rather than to
+    an individual.
+    """
     staff = _current_staff(db, _token)
     report = _get_report_or_404(db, report_id)
-    _require_claimant(staff, report)
+    _require_crew_member(db, staff, report)
+    _adopt_if_unclaimed(staff, report)
 
     if report.worker_completed == 1:
         raise HTTPException(
