@@ -7,6 +7,10 @@ python-multipart
 sqlalchemy
 psycopg2-binary
 
+# Durable image storage. Uploads otherwise land in /tmp, which is wiped on every
+# redeploy and cold start, so citizen photos did not survive their own report.
+vercel_blob
+
 # Security & Auth
 python-dotenv
 python-jose[cryptography]

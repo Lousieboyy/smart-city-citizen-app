@@ -652,6 +652,15 @@ LOCAL_UPLOAD_DIR = BASE_DIR / "uploads"
 TMP_UPLOAD_DIR = Path("/tmp/uploads") if (os.name != "nt" and os.path.exists("/tmp")) else LOCAL_UPLOAD_DIR
 UPLOAD_DIR = TMP_UPLOAD_DIR
 
+
+def _blob_is_configured() -> bool:
+    """True when Vercel Blob is available to store uploads durably.
+
+    Vercel injects BLOB_READ_WRITE_TOKEN once a Blob store is linked to the
+    project. Without it, uploads fall back to the ephemeral local directory.
+    """
+    return bool(os.getenv("BLOB_READ_WRITE_TOKEN", "").strip())
+
 try:
     LOCAL_UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
     if TMP_UPLOAD_DIR != LOCAL_UPLOAD_DIR:
@@ -1040,8 +1049,39 @@ def _safe_extension(filename: str) -> str:
 
 
 def _save_bytes_to_upload(contents: bytes, prefix: str = "", ext: str = ".jpg") -> str:
-    """Save bytes to the uploads directory and return the relative URL path."""
+    """Persist an uploaded image and return the URL to serve it from.
+
+    Prefers Vercel Blob, falling back to the uploads directory when no blob
+    token is configured (local development, or a host without it).
+
+    The local path is not durable on this host: UPLOAD_DIR resolves to /tmp,
+    which belongs to a single short-lived instance and is wiped on redeploy and
+    cold start. Every citizen photo written there was lost within minutes, which
+    is what the blob store fixes. The returned value is a full https:// URL when
+    blob storage is used; getImageUrl on the frontend passes those through
+    untouched, so nothing downstream needs to change.
+    """
     unique_name = f"{prefix}{uuid.uuid4()}{ext}"
+
+    if _blob_is_configured():
+        try:
+            import vercel_blob
+
+            result = vercel_blob.put(
+                f"uploads/{unique_name}",
+                contents,
+                {"access": "public", "addRandomSuffix": "false"},
+            )
+            url = result.get("url")
+            if url:
+                return url
+            logger.error("Blob upload returned no URL; falling back to local disk.")
+        except Exception as exc:
+            # Never lose the citizen's submission over a storage failure. The
+            # local copy is ephemeral, but a photo that survives minutes beats
+            # a failed report.
+            logger.error(f"Blob upload failed ({exc}); falling back to local disk.")
+
     file_path = UPLOAD_DIR / unique_name
     file_path.write_bytes(contents)
     return f"/uploads/{unique_name}"
