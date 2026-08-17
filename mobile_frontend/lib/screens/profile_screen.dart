@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../pixel_theme.dart';
@@ -344,20 +345,78 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                     if (newUsername.isEmpty) return;
 
+                    // Save to the server FIRST. This used to write only to
+                    // SharedPreferences, so edits looked saved but never left
+                    // the device — reinstall or another login and they were
+                    // gone, and the database never knew.
+                    late final http.Response res;
+                    try {
+                      res = await ApiService.updateProfile(
+                        username:    newUsername,
+                        fullName:    newFullName,
+                        icNumber:    newIc,
+                        phoneNumber: newPhone,
+                      );
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(tr('profile_update_offline')),
+                          backgroundColor: PixelTheme.alertRed,
+                        ));
+                      }
+                      return;
+                    }
+
+                    if (res.statusCode != 200) {
+                      String message = tr('profile_update_failed');
+                      if (res.statusCode == 409) {
+                        message = tr('profile_username_taken');
+                      } else {
+                        try {
+                          final detail = jsonDecode(res.body)['detail'];
+                          if (detail is String && detail.isNotEmpty) message = detail;
+                        } catch (_) {/* keep the generic message */}
+                      }
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(message),
+                          backgroundColor: PixelTheme.alertRed,
+                        ));
+                      }
+                      return;
+                    }
+
+                    // Server accepted it — now mirror locally so the UI and the
+                    // next cold start agree with the database.
+                    final body = jsonDecode(res.body) as Map<String, dynamic>;
+                    final savedUsername = body['username'] ?? newUsername;
+                    final savedToken    = body['token'];
+
                     final prefs = await SharedPreferences.getInstance();
-                    await prefs.setString('username', newUsername);
+                    await prefs.setString('username', savedUsername);
                     await prefs.setString('full_name', newFullName);
                     await prefs.setString('ic_number', newIc);
                     await prefs.setString('phone_number', newPhone);
+                    // A rename invalidates the claims in the old token.
+                    if (savedToken is String && savedToken.isNotEmpty) {
+                      await prefs.setString('token', savedToken);
+                      UserSession.instance.token = savedToken;
+                    }
 
                     setState(() {
-                      UserSession.instance.username    = newUsername;
+                      UserSession.instance.username    = savedUsername;
                       UserSession.instance.fullName    = newFullName;
                       UserSession.instance.icNumber    = newIc;
                       UserSession.instance.phoneNumber = newPhone;
                     });
 
-                    if (context.mounted) Navigator.pop(context);
+                    if (context.mounted) {
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(tr('profile_update_saved')),
+                        backgroundColor: PixelTheme.accentGreen,
+                      ));
+                    }
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: PixelTheme.accentOrange,

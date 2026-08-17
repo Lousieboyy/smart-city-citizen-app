@@ -180,6 +180,37 @@ class ApiService {
     return req.send().timeout(const Duration(seconds: 20));
   }
 
+  // ── Profile ──────────────────────────────────────────────────────────────
+
+  /// Persist profile edits for the signed-in user.
+  ///
+  /// Only the fields supplied are changed. The server scopes the update to the
+  /// caller's own record from the token, and returns a refreshed token because
+  /// a username change invalidates the claims in the old one.
+  static Future<http.Response> updateProfile({
+    String? username,
+    String? fullName,
+    String? icNumber,
+    String? phoneNumber,
+    String? email,
+  }) {
+    return http.put(
+      Uri.parse('$baseUrl/profile'),
+      // _authHeaders carries the bearer token only — it deliberately omits
+      // Content-Type so multipart uploads can set their own boundary. A JSON
+      // body needs the header added explicitly, or the server rejects it as
+      // unprocessable.
+      headers: {..._authHeaders, 'Content-Type': 'application/json'},
+      body: jsonEncode({
+        if (username    != null) 'username':    username,
+        if (fullName    != null) 'fullName':    fullName,
+        if (icNumber    != null) 'icNumber':    icNumber,
+        if (phoneNumber != null) 'phoneNumber': phoneNumber,
+        if (email       != null) 'email':       email,
+      }),
+    ).timeout(const Duration(seconds: 15));
+  }
+
   // ── Duplicate Check & Upvoting ──────────────────────────────────────────
 
   /// Check if a duplicate report exists near coordinates matching the categories.
