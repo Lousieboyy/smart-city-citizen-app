@@ -672,12 +672,21 @@ def serve_upload_file(file_name: str):
     if local_file.exists() and local_file.is_file():
         return FileResponse(str(local_file))
 
-    # 3. Fallback sample image
-    sample_file = LOCAL_UPLOAD_DIR / "5362d52e-27fc-424d-96d1-85b73f489715.jpg"
-    if sample_file.exists() and sample_file.is_file():
-        return FileResponse(str(sample_file))
-
-    raise HTTPException(status_code=404, detail="Image file not found")
+    # 3. Gone. Say so.
+    #
+    # This used to serve a hardcoded sample photo instead, so a lost upload
+    # showed an authority a real-looking picture of something else entirely,
+    # with nothing on screen to indicate it was not the citizen's photo.
+    # Dispatching a crew off the wrong image is worse than seeing no image.
+    #
+    # Uploads land in /tmp, which belongs to one short-lived instance and is
+    # wiped on redeploy and cold start, so this path is reached routinely
+    # rather than rarely. The durable fix is object storage; until then the
+    # failure is at least visible instead of silently plausible.
+    raise HTTPException(
+        status_code=404,
+        detail="This photo is no longer available on the server.",
+    )
 
 interpreter = None
 input_details = None
@@ -1395,6 +1404,104 @@ def login(req: AuthRequest, db: Session = Depends(get_db)):
         "email":    getattr(db_obj, "email", "N/A"),
         "role":     role,
         "token":    token,
+    }
+
+
+class ProfileUpdate(BaseModel):
+    """Fields a signed-in user may change about themselves. All optional —
+    only the ones supplied are touched."""
+    username:    Optional[str] = Field(None, min_length=1, max_length=64)
+    fullName:    Optional[str] = Field(None, max_length=128)
+    icNumber:    Optional[str] = Field(None, max_length=32)
+    phoneNumber: Optional[str] = Field(None, max_length=32)
+    email:       Optional[str] = Field(None, max_length=128)
+
+
+@app.put("/profile")
+def update_profile(
+    req: ProfileUpdate,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """
+    Update the signed-in user's own profile.
+
+    Scoped to the caller's own record via the token's subject — there is
+    deliberately no user_id parameter, so this cannot be used to edit anyone
+    else's details.
+    """
+    try:
+        user_id = int(_token.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Malformed token subject.")
+
+    role = (_token.get("role") or "citizen").lower()
+    is_staff = role in ("worker", "authority", "admin")
+
+    record = (db.query(DBStaff).filter(DBStaff.id == user_id).first() if is_staff
+              else db.query(DBUser).filter(DBUser.id == user_id).first())
+    if not record:
+        raise HTTPException(status_code=404, detail="Account not found.")
+
+    updated, ignored = [], []
+
+    new_username = (req.username or "").strip()
+    if new_username and new_username != record.username:
+        # Usernames are the login identifier and unique across both tables,
+        # so check them together the same way signup does.
+        taken = (db.query(DBUser).filter(DBUser.username == new_username).first()
+                 or db.query(DBStaff).filter(DBStaff.username == new_username).first())
+        if taken:
+            raise HTTPException(status_code=409, detail="That username is already taken.")
+
+        # Complaints record the assigned worker by name, not by id, so a staff
+        # rename would otherwise orphan every job already assigned to them.
+        if is_staff:
+            db.query(DBComplaint).filter(
+                DBComplaint.assigned_worker == record.username
+            ).update({DBComplaint.assigned_worker: new_username},
+                     synchronize_session=False)
+
+        record.username = new_username
+        updated.append("username")
+
+    for field in ("fullName", "icNumber", "phoneNumber", "email"):
+        value = getattr(req, field)
+        if value is None:
+            continue
+        value = value.strip()
+        if not hasattr(record, field):
+            # Staff rows carry no fullName/icNumber columns. Report this back
+            # rather than pretending the value was stored.
+            ignored.append(field)
+            continue
+        if getattr(record, field) != value:
+            setattr(record, field, value)
+            updated.append(field)
+
+    db.commit()
+    db.refresh(record)
+
+    # The old token still carries the previous username in its claims, so hand
+    # back a fresh one to keep the session consistent after a rename.
+    token = create_access_token({
+        "sub": str(record.id),
+        "username": record.username,
+        "role": role,
+    })
+
+    return {
+        "message": "Profile updated successfully.",
+        "updated": updated,
+        "ignored": ignored,
+        "user_id": record.id,
+        "username": record.username,
+        "fullName": getattr(record, "fullName", record.username),
+        "icNumber": getattr(record, "icNumber", "N/A"),
+        "phoneNumber": getattr(record, "phoneNumber", "N/A"),
+        "email": getattr(record, "email", "N/A"),
+        "role": role,
+        "token": token,
     }
 
 
