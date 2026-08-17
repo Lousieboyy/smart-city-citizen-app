@@ -556,9 +556,24 @@ def seed_database():
                 ))
         db.commit()
 
-        # 5. Seed Reports (Complaints)
+        # 5. Seed Reports (Complaints) — opt-in only.
+        #
+        # This runs on every startup, and its guard only asked whether any report
+        # was assigned to "worker1". Deleting the demo data therefore satisfied
+        # the guard, and the next cold start recreated all three complaints —
+        # so they could not be removed permanently, and reappeared with fresh
+        # IDs looking like genuine new submissions.
+        #
+        # A deployment serving real citizens must not invent reports: staff
+        # could dispatch a crew to an address nobody complained about. Demo data
+        # now appears only when SEED_DEMO_DATA is explicitly set, which keeps it
+        # available for local testing without it leaking into production.
+        #
+        # Accounts, staff, agencies and categories above are still seeded
+        # unconditionally, because without them nobody can log in.
+        seed_demo_reports = os.getenv("SEED_DEMO_DATA", "").strip().lower() in ("1", "true", "yes")
         citizen = db.query(DBUser).filter(DBUser.username == "test").first()
-        if citizen and not db.query(DBComplaint).filter(DBComplaint.assigned_worker == "worker1").first():
+        if seed_demo_reports and citizen and not db.query(DBComplaint).first():
             # Street lighting complaint (In Process)
             db.add(DBComplaint(
                 user_id=citizen.id,
@@ -627,7 +642,10 @@ def seed_database():
                     db.add(DBIssue(complaintID=comp.id, categoryID=cat.categoryID, count=1))
             db.commit()
 
-        print("[Seed] Database fully seeded successfully!")
+        if seed_demo_reports:
+            print("[Seed] Reference data seeded. Demo reports enabled via SEED_DEMO_DATA.")
+        else:
+            print("[Seed] Reference data seeded. Demo reports skipped (set SEED_DEMO_DATA=true to include them).")
     except Exception as e:
         db.rollback()
         print(f"[Seed] Error seeding database: {e}")
