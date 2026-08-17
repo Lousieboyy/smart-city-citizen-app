@@ -179,6 +179,10 @@ class DBStaff(Base):
     agencyID = Column(Integer, ForeignKey("Agency.agencyID"), nullable=True)
     crewID = Column(Integer, ForeignKey("Crew.id"), nullable=True)
     on_leave = Column(Boolean, default=False)  # excluded from dispatch/claim while true
+    # active | pending | rejected. Account management previously lived entirely
+    # in browser localStorage, so an approved worker existed only in the browser
+    # that approved them and could never actually sign in.
+    status = Column(String(16), default="active")
 
 
 class DBAgency(Base):
@@ -392,6 +396,9 @@ def _add_missing_columns():
         "Staff": [
             ("crewID", "INTEGER"),
             ("on_leave", "BOOLEAN DEFAULT FALSE"),
+            # Account approval state. Existing rows default to active so nobody
+            # who could log in yesterday is locked out by this migration.
+            ("status", "VARCHAR(16) DEFAULT 'active'"),
         ],
         "DatasetSample": [
             ("pending_blob", "TEXT"),
@@ -1435,6 +1442,19 @@ def login(req: AuthRequest, db: Session = Depends(get_db)):
         staff = db.query(DBStaff).filter(DBStaff.username == req.username).first()
         if staff:
             if verify_password(req.password, staff.password_hash):
+                # Approval is enforced here, after the password check, so an
+                # attacker cannot use the error message to discover which
+                # usernames exist.
+                if (staff.status or "active") == "pending":
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Your account is awaiting admin approval.",
+                    )
+                if (staff.status or "active") == "rejected":
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Your account request was rejected.",
+                    )
                 db_obj = staff
                 role = staff.role or "worker"
 
@@ -3888,6 +3908,218 @@ def report_authenticity(
     }
 
 
+# ─────────────────────────────────────────────────────────────
+#  STAFF ACCOUNTS
+#
+#  Account management previously lived entirely in browser localStorage: a
+#  worker "created" by an admin existed only in that admin's browser, never
+#  reached the database, and could not actually sign in. Approval decisions
+#  were equally local, so who may dispatch a crew was decided client-side with
+#  no server-side check at all.
+# ─────────────────────────────────────────────────────────────
+STAFF_ROLES = ("worker", "authority", "admin")
+STAFF_STATUSES = ("active", "pending", "rejected")
+
+
+class StaffCreateRequest(BaseModel):
+    username: str = Field(..., min_length=2, max_length=64)
+    password: str = Field(..., min_length=4, max_length=128)
+    role: str = Field("worker", max_length=32)
+    email: Optional[str] = Field(None, max_length=128)
+    phoneNumber: Optional[str] = Field(None, max_length=32)
+    agency_id: Optional[int] = None
+    crew_id: Optional[int] = None
+    status: Optional[str] = Field(None, max_length=16)
+
+
+class StaffStatusRequest(BaseModel):
+    status: str = Field(..., max_length=16)
+
+
+def _serialize_staff(s: DBStaff, agency_name: Optional[str] = None) -> dict:
+    return {
+        "id": s.id,
+        "username": s.username,
+        "email": s.email,
+        "phoneNumber": s.phoneNumber,
+        "role": s.role or "worker",
+        "status": s.status or "active",
+        "agency_id": s.agencyID,
+        "agency": agency_name,
+        "crew_id": s.crewID,
+        "on_leave": bool(s.on_leave),
+    }
+
+
+def _require_admin(db: Session, token: dict) -> DBStaff:
+    staff = _current_staff(db, token)
+    if staff.role != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin may manage staff accounts.")
+    return staff
+
+
+@app.get("/staff")
+def list_staff(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """All staff accounts. Admin only — this is the account register."""
+    _require_admin(db, _token)
+
+    query = db.query(DBStaff)
+    if status and status != "all":
+        query = query.filter(DBStaff.status == status)
+
+    agencies = {a.agencyID: a.name for a in db.query(DBAgency).all()}
+    rows = query.order_by(DBStaff.id.asc()).all()
+    return [_serialize_staff(s, agencies.get(s.agencyID)) for s in rows]
+
+
+@app.post("/staff")
+def create_staff(
+    req: StaffCreateRequest,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Create a staff account. Admin only; the account is active immediately."""
+    _require_admin(db, _token)
+
+    role = (req.role or "worker").lower()
+    if role not in STAFF_ROLES:
+        raise HTTPException(status_code=400, detail=f"role must be one of {', '.join(STAFF_ROLES)}.")
+
+    status = (req.status or "active").lower()
+    if status not in STAFF_STATUSES:
+        raise HTTPException(status_code=400, detail=f"status must be one of {', '.join(STAFF_STATUSES)}.")
+
+    username = req.username.strip()
+    # Checked against both tables: citizens and staff share one namespace, and
+    # login resolves a username against Users first.
+    if db.query(DBStaff).filter(DBStaff.username == username).first() or \
+       db.query(DBUser).filter(DBUser.username == username).first():
+        raise HTTPException(status_code=400, detail="Username already registered.")
+
+    if req.agency_id and not db.query(DBAgency).filter(DBAgency.agencyID == req.agency_id).first():
+        raise HTTPException(status_code=400, detail="That team does not exist.")
+
+    staff = DBStaff(
+        username=username,
+        password_hash=hash_password(req.password),
+        email=req.email,
+        phoneNumber=req.phoneNumber,
+        role=role,
+        agencyID=req.agency_id,
+        crewID=req.crew_id,
+        status=status,
+        on_leave=False,
+    )
+    db.add(staff)
+    db.commit()
+    db.refresh(staff)
+
+    agency = db.query(DBAgency).filter(DBAgency.agencyID == staff.agencyID).first()
+    return _serialize_staff(staff, agency.name if agency else None)
+
+
+@app.post("/staff/request")
+def request_staff_account(req: StaffCreateRequest, db: Session = Depends(get_db)):
+    """Self-service access request. Unauthenticated by design — the person
+    asking for an account has no account yet.
+
+    Always created as pending regardless of what the client sends, and the role
+    is restricted, so this endpoint cannot be used to mint an active admin.
+    """
+    role = (req.role or "worker").lower()
+    if role not in ("worker", "authority"):
+        raise HTTPException(status_code=400, detail="You may request a worker or authority account.")
+
+    username = req.username.strip()
+    if db.query(DBStaff).filter(DBStaff.username == username).first() or \
+       db.query(DBUser).filter(DBUser.username == username).first():
+        raise HTTPException(status_code=400, detail="Username already registered.")
+
+    staff = DBStaff(
+        username=username,
+        password_hash=hash_password(req.password),
+        email=req.email,
+        phoneNumber=req.phoneNumber,
+        role=role,
+        agencyID=req.agency_id,
+        status="pending",
+        on_leave=False,
+    )
+    db.add(staff)
+    db.commit()
+    return {"ok": True, "message": "Request submitted. An admin will review it."}
+
+
+@app.patch("/staff/{staff_id}/status")
+def set_staff_status(
+    staff_id: int,
+    req: StaffStatusRequest,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Approve or reject an account request. Admin only."""
+    admin = _require_admin(db, _token)
+
+    status = (req.status or "").lower()
+    if status not in STAFF_STATUSES:
+        raise HTTPException(status_code=400, detail=f"status must be one of {', '.join(STAFF_STATUSES)}.")
+
+    staff = db.query(DBStaff).filter(DBStaff.id == staff_id).first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff account not found.")
+
+    # An admin locking themselves out would leave nobody able to manage accounts.
+    if staff.id == admin.id and status != "active":
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own admin account.")
+
+    staff.status = status
+    db.commit()
+    db.refresh(staff)
+
+    agency = db.query(DBAgency).filter(DBAgency.agencyID == staff.agencyID).first()
+    return _serialize_staff(staff, agency.name if agency else None)
+
+
+@app.delete("/staff/{staff_id}")
+def delete_staff(
+    staff_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Remove a staff account. Admin only."""
+    admin = _require_admin(db, _token)
+
+    staff = db.query(DBStaff).filter(DBStaff.id == staff_id).first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff account not found.")
+    if staff.id == admin.id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+
+    # Reports reference the worker by id. Detaching rather than cascading keeps
+    # the history intact: the work still happened, it just has no current owner.
+    open_reports = (
+        db.query(DBComplaint)
+        .filter(DBComplaint.assigned_worker_id == staff.id)
+        .all()
+    )
+    for report in open_reports:
+        report.assigned_worker_id = None
+        report.assigned_worker = None
+        report.claimed_at = None
+
+    db.delete(staff)
+    db.commit()
+    return {
+        "ok": True,
+        "released_reports": len(open_reports),
+        "message": f"Account removed. {len(open_reports)} report(s) returned to the team pool.",
+    }
+
+
 # NOTE: this must stay above the `GET /{catchall:path}` route below, which
 # matches everything. FastAPI resolves in registration order.
 @app.get("/reports/actions")
@@ -3988,4 +4220,4 @@ async def catch_all(catchall: str):
     )
 
 
-app = ApiPrefixMiddleware(app)
+app = ApiPrefixMiddleware(app)
