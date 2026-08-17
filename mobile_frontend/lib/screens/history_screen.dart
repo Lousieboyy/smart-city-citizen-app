@@ -12,6 +12,7 @@ import '../widgets/glass_card.dart';
 import '../widgets/pixel_widgets.dart';
 import '../pixel_theme.dart';
 import '../localization/app_strings.dart';
+import '../utils/report_text.dart';
 
 /// Report history screen.
 class HistoryScreen extends StatefulWidget {
@@ -26,6 +27,16 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
+  /// Whether the signed-in user is staff, and so may see internal dispatch
+  /// notes. Defaults to hiding: an unrecognised role is treated as a citizen
+  /// rather than shown the internal thread by accident.
+  bool get _canSeeDispatchThread {
+    final role = UserSession.instance.role.toLowerCase();
+    return role.contains('worker') ||
+        role.contains('authority') ||
+        role.contains('admin');
+  }
+
   List<dynamic> _reports = [];
   bool _isLoading = true;
   Timer? _refreshTimer;
@@ -516,7 +527,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
               // Description
               Text(
-                item['description'] ?? tr('history_no_description'),
+                cleanDescription(item['description']).isEmpty
+                    ? tr('history_no_description')
+                    : cleanDescription(item['description']),
                 style: PixelTheme.pixelBody(fontSize: 14, color: PixelTheme.textSecondary, fontWeight: FontWeight.normal),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -569,8 +582,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 ),
               ],
 
-              // Authority / dispatch notes thread
-              if (item['authority_notes'] != null &&
+              // Authority / dispatch notes thread.
+              //
+              // Staff-only. This is the internal handover conversation between
+              // admin, authorities and workers — transfers, released tasks,
+              // crew assignments. A citizen tracking their own pothole has no
+              // use for it, and it exposes how work is shuffled internally.
+              if (_canSeeDispatchThread &&
+                  item['authority_notes'] != null &&
                   (item['authority_notes'] as String).isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Container(

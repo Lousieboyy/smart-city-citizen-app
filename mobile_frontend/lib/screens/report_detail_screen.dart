@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/api_service.dart';
 import '../utils/image_upload_prep.dart';
+import '../utils/report_text.dart';
 import '../app_config.dart';
 import '../user_session.dart';
 import 'history_screen.dart'; // For FullScreenImageViewer reference
@@ -32,6 +33,16 @@ class ReportDetailScreen extends StatefulWidget {
 class _ReportDetailScreenState extends State<ReportDetailScreen> {
   late Map<String, dynamic> _report;
   bool _isLoadingAction = false;
+
+  /// Whether the signed-in user is staff, and so may see internal dispatch
+  /// notes. Defaults to hiding: an unrecognised role is treated as a citizen
+  /// rather than shown the internal thread by accident.
+  bool get _canSeeDispatchThread {
+    final role = UserSession.instance.role.toLowerCase();
+    return role.contains('worker') ||
+        role.contains('authority') ||
+        role.contains('admin');
+  }
   
   // Worker fields
   XFile? _proofImageFile;
@@ -559,8 +570,11 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                     _buildSectionHeader(tr('detail_workflow_timeline'), Icons.route_rounded),
                     _buildTimelineCard(),
 
-                    // Communication Thread (if authority notes present)
-                    if (userRole.toLowerCase() != 'citizen' &&
+                    // Communication Thread (if authority notes present).
+                    // Allow-list rather than "not citizen", so an empty or
+                    // unrecognised role hides the internal thread instead of
+                    // revealing it.
+                    if (_canSeeDispatchThread &&
                         _report['authority_notes'] != null &&
                         (_report['authority_notes'] as String).trim().isNotEmpty) ...[
                       const SizedBox(height: 20),
@@ -625,18 +639,19 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
                           final data = jsonDecode(res.body);
                           _showSnackBar(tr('detail_upvote_recorded'), PixelTheme.accentGreen);
                           setState(() {
-                            final newCount = data['upvotes'] ?? (upvotes + 1);
-                            _report['upvotes'] = newCount;
-                            
-                            final desc = _report['description'] ?? "";
-                            if (desc.contains('[Upvote count:')) {
-                              _report['description'] = desc.replaceAll(
-                                RegExp(r'\[Upvote count:\s*\d+\]'),
-                                '[Upvote count: $newCount]',
-                              );
-                            } else {
-                              _report['description'] = "$desc\n[Upvote count: $newCount]".trim();
-                            }
+                            _report['upvotes'] = data['upvotes'] ?? (upvotes + 1);
+
+                            // The count is its own field and is rendered on the
+                            // button below, so it does not belong inside the
+                            // citizen's description text. The server already
+                            // strips any legacy "[Upvote count: N]" marker on
+                            // upvote; do the same locally so old reports clean
+                            // up on screen instead of showing a stale number.
+                            final desc = (_report['description'] ?? '') as String;
+                            _report['description'] = desc
+                                .replaceAll(RegExp(r'\s*\[Upvote count:\s*\d+\]'), '')
+                                .replaceAll(RegExp(r'\s*\[Urgent Flags:\s*\d+\]'), '')
+                                .trim();
                           });
                         } else {
                           _showSnackBar(tr('detail_upvote_failed'), PixelTheme.alertRed);
@@ -1171,7 +1186,9 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
           const SizedBox(width: 14),
           Expanded(
             child: Text(
-              _report['description'] ?? tr('detail_no_description'),
+              cleanDescription(_report['description']).isEmpty
+                  ? tr('detail_no_description')
+                  : cleanDescription(_report['description']),
               style: TextStyle(
                 fontSize: 14, 
                 color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF2B2B28), 

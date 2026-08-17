@@ -15,6 +15,7 @@ import '../widgets/pixel_widgets.dart';
 import 'report_detail_screen.dart';
 import '../services/notification_service.dart';
 import '../localization/app_strings.dart';
+import '../utils/report_text.dart';
 
 class MapViewScreen extends StatefulWidget {
   const MapViewScreen({super.key});
@@ -374,10 +375,10 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                if (issue.rawData['description'] != null && issue.rawData['description'].toString().isNotEmpty) ...[
+                if (cleanDescription(issue.rawData['description']).isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(
-                    issue.rawData['description'],
+                    cleanDescription(issue.rawData['description']),
                     style: TextStyle(
                       fontSize: 11,
                       color: isDark ? const Color(0xFFB7B3AC) : const Color(0xFF8A8A85),
