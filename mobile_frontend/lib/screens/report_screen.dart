@@ -41,6 +41,9 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   String? _confidence;
   String? _aiRawResult;
   String? _gradcamUrl;
+  String? _authenticityVerdict;
+  String? _authenticityConfidence;
+  bool _aiDetectedNormal = false;
 
   // ── Form ──────────────────────────────────────────────────────────────────
   final _formKey = GlobalKey<FormState>();
@@ -74,7 +77,6 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   // ── Category definitions ──────────────────────────────────────────────────
   static const _categories = [
     {'name': 'Drainage',         'icon': Icons.water_drop_outlined,  'color': Color(0xFFE3F2FD), 'iconColor': Colors.blue},
-    {'name': 'Normal',           'icon': Icons.check_circle_outline, 'color': Color(0xFFE8F5E9), 'iconColor': Colors.green},
     {'name': 'Street Lighting',  'icon': Icons.lightbulb_outline,    'color': Color(0xFFFFF9C4), 'iconColor': Colors.orangeAccent},
     {'name': 'Road Damage',      'icon': Icons.construction,         'color': Color(0xFFFFEBEE), 'iconColor': Colors.red},
     {'name': 'Waste Management', 'icon': Icons.delete_outline,       'color': Color(0xFFFFF3E0), 'iconColor': Colors.orange},
@@ -191,9 +193,31 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       _confidence   = null;
       _aiRawResult  = null;
       _gradcamUrl   = null;
+      _authenticityVerdict    = null;
+      _authenticityConfidence = null;
+      _aiDetectedNormal        = false;
     });
 
     await _classifyImage(picked);
+  }
+
+  /// Clears the current (no-issue) photo and immediately reopens the picker --
+  /// the citizen isn't left staring at a locked form, they're routed straight
+  /// to taking a new photo.
+  void _retakeForNormalPhoto() {
+    setState(() {
+      _pickedFile   = null;
+      _imageBytes   = null;
+      _metadataBlob = null;
+      _selectedCategories.clear();
+      _confidence   = null;
+      _aiRawResult  = null;
+      _gradcamUrl   = null;
+      _authenticityVerdict    = null;
+      _authenticityConfidence = null;
+      _aiDetectedNormal        = false;
+    });
+    _showImageSourceDialog();
   }
 
   void _showImageSourceDialog() {
@@ -260,6 +284,9 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           _confidence  = decoded['confidence'];
           _aiRawResult = decoded['issue_type'];
           _gradcamUrl  = decoded['gradcam_url'];
+          final authenticity = decoded['authenticity'] as Map<String, dynamic>?;
+          _authenticityVerdict    = authenticity?['verdict'];
+          _authenticityConfidence = authenticity?['confidence'];
           _selectedCategories.clear();
 
           // 1. Process multi-label predictions if present
@@ -295,11 +322,6 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                     _selectedCategories.add('Street Lighting');
                   }
                 }
-                if (label.contains('normal')) {
-                  if (!_selectedCategories.contains('Normal')) {
-                    _selectedCategories.add('Normal');
-                  }
-                }
               }
             }
           }
@@ -327,16 +349,23 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
               if (raw.contains('street light')) {
                 _selectedCategories.add('Street Lighting');
               }
-              if (raw.contains('normal')) {
-                _selectedCategories.add('Normal');
-              }
             }
           }
 
-          // 3. Default fallback if still empty
-          if (_selectedCategories.isEmpty) {
+          // 3. Default fallback if still empty -- but never for a report the
+          // model itself judged as "normal" (no issue). Leaving categories
+          // empty here trips the existing "select a category" validation on
+          // submit instead of silently filing a no-issue photo as "Other".
+          final topLabel = decoded['issue_type'].toString().toLowerCase();
+          final isNormal = _selectedCategories.isEmpty && topLabel.contains('normal');
+          if (!isNormal && _selectedCategories.isEmpty) {
             _selectedCategories.add('Other');
           }
+
+          // A "normal" verdict locks category selection entirely (see
+          // _buildCategoryGrid) -- the citizen must retake the photo rather
+          // than pick a category by hand for a scene with no detected issue.
+          _aiDetectedNormal = isNormal;
         });
       } else if (response.statusCode == 401) {
         debugPrint('[AI] Classification failed: session expired (401)');
@@ -370,11 +399,35 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       _showSnack(tr('report_error_analyzing'), isError: true);
       return;
     }
+    if (_aiDetectedNormal) {
+      _showSnack(tr('report_normal_detected_body'), isError: true);
+      return;
+    }
     if (_selectedCategories.isEmpty) {
       _showSnack(tr('report_error_no_category'), isError: true);
       return;
     }
     if (!_formKey.currentState!.validate()) return;
+
+    // High-confidence AI-generation verdicts get a warning + choice, never a
+    // silent block: metadata forensics is heuristic, and blocking outright
+    // risks repeating the old fake_detector.py false-alarm problem.
+    if (_authenticityVerdict == 'ai_confirmed' && _authenticityConfidence == 'high') {
+      final bool? choice = await _showAiImageWarningDialog();
+      if (choice == null) {
+        return; // user canceled submission
+      } else if (choice == true) {
+        setState(() {
+          _pickedFile   = null;
+          _imageBytes   = null;
+          _metadataBlob = null;
+          _authenticityVerdict    = null;
+          _authenticityConfidence = null;
+        });
+        return; // user chose to retake the photo
+      }
+      // choice == false: user chose "Submit Anyway" — fall through.
+    }
 
     final session = UserSession.instance;
     if (!session.isLoggedIn) {
@@ -618,6 +671,63 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
     );
   }
 
+  /// Returns null (canceled), true (retake photo), or false (submit anyway).
+  Future<bool?> _showAiImageWarningDialog() {
+    return showDialog<bool?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(26),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.smart_toy_outlined, color: PixelTheme.alertRed, size: 24),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  tr('report_ai_image_title'),
+                  style: PixelTheme.pixelHeading(fontSize: 17, color: PixelTheme.textPrimary),
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            tr('report_ai_image_body'),
+            style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary),
+          ),
+          actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, null),
+              child: Text(tr('common_cancel'), style: PixelTheme.pixelBody(color: PixelTheme.textSecondary, fontSize: 14)),
+            ),
+            OutlinedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: PixelTheme.textSecondary,
+                side: const BorderSide(color: PixelTheme.bgBorder),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              ),
+              child: Text(tr('report_ai_image_retake'), style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, false),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: PixelTheme.alertRed,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              ),
+              child: Text(tr('report_ai_image_submit_anyway'), style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   // ── Step-progress tracker ────────────────────────────────────────────────
   // Real fill-state, not a fake step count — reflects what's actually done.
   bool get _step1Done => _imageBytes != null || _pickedFile != null;
@@ -795,7 +905,7 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
                     children: [
                       _gradcamUrl != null
                           ? Image.network(
-                              '${ApiService.baseUrl}${_gradcamUrl!.startsWith('/') ? _gradcamUrl! : '/$_gradcamUrl'}',
+                              ApiService.resolveImageUrl(_gradcamUrl),
                               fit: BoxFit.cover,
                             )
                           : (_imageBytes != null
@@ -818,8 +928,7 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
 
   Widget _buildAIAnalysisCard() {
     if (_imageBytes == null && _pickedFile == null) return const SizedBox.shrink();
-    final isNormal = _selectedCategories.contains('Normal');
-    final activeColor = isNormal ? PixelTheme.accentGreen : PixelTheme.accentOrange;
+    const activeColor = PixelTheme.accentOrange;
 
     return GlassCard(
       margin: const EdgeInsets.only(top: 20),
@@ -860,12 +969,7 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
               children: [
                 Row(
                   children: [
-                    Icon(
-                        isNormal
-                            ? Icons.verified_rounded
-                            : Icons.auto_awesome_rounded,
-                        color: activeColor,
-                        size: 20),
+                    const Icon(Icons.auto_awesome_rounded, color: activeColor, size: 20),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -946,6 +1050,9 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
   }
 
   Widget _buildCategoryGrid() {
+    if (_aiDetectedNormal) {
+      return _buildNormalDetectedNotice();
+    }
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -1005,6 +1112,53 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
           ),
         );
       },
+    );
+  }
+
+  /// Shown instead of the category grid when the scan found no issue. The
+  /// citizen can't pick a category by hand here -- the only way out is to
+  /// retake the photo.
+  Widget _buildNormalDetectedNotice() {
+    return GlassCard(
+      borderRadius: BorderRadius.circular(22),
+      color: PixelTheme.accentGreen.withOpacity(0.08),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.check_circle_outline_rounded, color: PixelTheme.accentGreen, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  tr('report_normal_detected_title'),
+                  style: PixelTheme.pixelHeading(fontSize: 15, color: PixelTheme.textPrimary),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            tr('report_normal_detected_body'),
+            style: PixelTheme.pixelBody(fontSize: 13, color: PixelTheme.textSecondary),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _retakeForNormalPhoto,
+              icon: const Icon(Icons.camera_alt_outlined, size: 18),
+              label: Text(tr('report_normal_detected_retake'), style: const TextStyle(fontWeight: FontWeight.bold)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: PixelTheme.accentGreen,
+                side: const BorderSide(color: PixelTheme.accentGreen, width: 1.5),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1115,7 +1269,7 @@ class _CitizenReportScreenState extends State<CitizenReportScreen> {
       color: PixelTheme.accentOrange,
       height: 54,
       isLoading: _isSubmitting,
-      onPressed: (_isAnalyzing || _isSubmitting) ? null : _submitReport,
+      onPressed: (_isAnalyzing || _isSubmitting || _aiDetectedNormal) ? null : _submitReport,
     );
   }
 }

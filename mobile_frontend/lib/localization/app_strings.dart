@@ -203,6 +203,13 @@ const Map<String, Map<String, String>> _strings = {
   'report_duplicate_confirm_failed':       {'en': 'Failed to confirm report.', 'bm': 'Gagal mengesahkan laporan.'},
   'report_duplicate_confirm_error_prefix': {'en': 'Error confirming report: ', 'bm': 'Ralat mengesahkan laporan: '},
   'report_duplicate_confirm_button':       {'en': 'Confirm This Issue (+1)', 'bm': 'Sahkan Isu Ini (+1)'},
+  'report_ai_image_title':                 {'en': 'This Photo Looks AI-Generated', 'bm': 'Foto Ini Kelihatan Dijana AI'},
+  'report_ai_image_body':                  {'en': "Our scan found strong signs this image was generated or edited by AI software, not captured by a camera. If this is a real photo of the issue, you can retake it directly from your camera app, or submit anyway and staff will review it manually.", 'bm': 'Imbasan kami mengesan tanda kuat bahawa imej ini dijana atau disunting oleh perisian AI, bukan diambil menggunakan kamera. Jika ini adalah foto sebenar isu tersebut, anda boleh ambil semula terus daripada aplikasi kamera anda, atau hantar juga dan kakitangan akan menyemaknya secara manual.'},
+  'report_ai_image_retake':                {'en': 'Retake Photo', 'bm': 'Ambil Semula Foto'},
+  'report_ai_image_submit_anyway':         {'en': 'Submit Anyway', 'bm': 'Hantar Juga'},
+  'report_normal_detected_title':          {'en': 'No Issue Detected', 'bm': 'Tiada Isu Dikesan'},
+  'report_normal_detected_body':           {'en': "Our scan didn't find anything wrong in this photo, so it can't be filed as a report. Please retake the photo, making sure the actual issue is clearly visible.", 'bm': 'Imbasan kami tidak menemui sebarang masalah dalam foto ini, jadi ia tidak boleh difailkan sebagai laporan. Sila ambil semula foto tersebut, pastikan isu sebenar kelihatan dengan jelas.'},
+  'report_normal_detected_retake':         {'en': 'Take New Photo', 'bm': 'Ambil Foto Baharu'},
 
   // ── Report detail screen ────────────────────────────────────────────────
   'detail_title':                {'en': 'Report Details', 'bm': 'Butiran Laporan'},
