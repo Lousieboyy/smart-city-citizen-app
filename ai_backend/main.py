@@ -1095,7 +1095,17 @@ def _save_bytes_to_upload(contents: bytes, prefix: str = "", ext: str = ".jpg") 
             result = vercel_blob.put(
                 f"uploads/{unique_name}",
                 contents,
-                {"access": "public", "addRandomSuffix": "false"},
+                # allowOverwrite matters here even though unique_name is a
+                # fresh UUID every call: vercel_blob's own retry loop re-PUTs
+                # the same pathname on a transient network error. Without it,
+                # a retry after a server-side-successful-but-client-dropped
+                # upload gets rejected with 409 "already exists", which this
+                # function then treats as a failure and silently falls back
+                # to the ephemeral local disk copy -- exactly the failure
+                # mode that left citizen photos unreachable despite the blob
+                # actually existing in storage.
+                {"access": "public", "addRandomSuffix": "false", "allowOverwrite": "true"},
+                timeout=30,
             )
             url = result.get("url")
             if url:
