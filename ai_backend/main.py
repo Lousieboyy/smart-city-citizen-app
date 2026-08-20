@@ -1683,10 +1683,23 @@ def get_reports(
                 DBComplaint.assigned_worker_id.is_(None),
                 _crew_visible_to(my_crew),
             )
+            # A teammate's claimed job, once accepted, used to vanish from
+            # everyone else's list entirely — not just uneditable, invisible.
+            # start-maintenance and complete-task already let any crew member
+            # act on it (_require_crew_member), so the list was the one place
+            # still enforcing solo ownership the rest of the app had already
+            # moved away from. Same crew-visibility rule as the pool.
+            crewmates_claims = and_(
+                DBComplaint.assigned_agency_id == my_agency,
+                DBComplaint.assigned_worker_id.isnot(None),
+                DBComplaint.assigned_worker_id != my_id,
+                _crew_visible_to(my_crew),
+            )
         else:
             # On leave: still see claimed work (to finish or release it), but no
             # new pool items — nothing to notify them about while they're out.
             pool = false()
+            crewmates_claims = false()
 
         if scope == "mine":
             query = query.filter(mine)
@@ -1710,7 +1723,7 @@ def get_reports(
             else:
                 query = query.filter(false())
         else:
-            query = query.filter(or_(mine, pool))
+            query = query.filter(or_(mine, pool, crewmates_claims))
 
         query = query.filter(DBComplaint.status.in_(["In Process", "In Maintenance"]))
     elif token_role == "authority" or token_role.startswith("authority_"):
