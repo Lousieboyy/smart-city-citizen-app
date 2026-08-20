@@ -1122,6 +1122,27 @@ def _save_bytes_to_upload(contents: bytes, prefix: str = "", ext: str = ".jpg") 
     return f"/uploads/{unique_name}"
 
 
+def _utc_iso(dt) -> Optional[str]:
+    """ISO-format a DateTime column value, always as an explicit UTC offset.
+
+    `timestamp`/`actionDate` are plain (non-timezone) DateTime columns, so
+    Postgres returns them naive on read even though every write path used
+    datetime.now(timezone.utc). Calling .isoformat() on that naive value
+    drops the offset entirely, and a client (Dart's DateTime.parse included)
+    then treats the string as already being in ITS OWN local time -- in
+    Melaka that reads every report as submitted 8 hours in the past, since
+    the client re-applies a UTC+8 shift on top of a value that was never
+    shifted away from UTC in the first place. Reattaching tzinfo before
+    formatting is what actually fixes it, once here instead of in every
+    client that reads this API.
+    """
+    if not hasattr(dt, "isoformat"):
+        return str(dt) if dt else None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
 # ─────────────────────────────────────────────────────────────
 #  HELPERS
 # ─────────────────────────────────────────────────────────────
@@ -1140,12 +1161,7 @@ def _serialize(r: DBComplaint) -> dict:
         "confidence":               r.confidence,
         "image_path":               r.image_path,
         "status":                   r.status,
-        "timestamp": (
-            r.timestamp.isoformat()
-            if hasattr(r.timestamp, "isoformat")
-            else str(r.timestamp) if r.timestamp
-            else None
-        ),
+        "timestamp": _utc_iso(r.timestamp),
         "assigned_department":      r.assigned_department,
         "authority_notes":          r.authority_notes,
         "forwarded_at":             r.forwarded_at,
@@ -4186,9 +4202,7 @@ def list_authority_actions(
             "status": a.status,
             "remarks": a.remarks,
             "staff_id": a.staffID,
-            "action_date": a.actionDate.isoformat()
-            if hasattr(a.actionDate, "isoformat")
-            else a.actionDate,
+            "action_date": _utc_iso(a.actionDate),
         }
         for a in rows
     ]
