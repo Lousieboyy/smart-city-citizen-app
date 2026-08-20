@@ -639,8 +639,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               // Original photo thumbnail
               if (item['image_path'] != null) ...[
                 const SizedBox(height: 12),
-                _buildImageThumbnail(
-                    '${ApiService.baseUrl}${item['image_path'].toString().startsWith('/') ? item['image_path'] : '/${item['image_path']}'}'),
+                _buildImageThumbnail(ApiService.resolveImageUrl(item['image_path'].toString())),
               ],
 
               // Worker completion proof
@@ -665,7 +664,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ),
                       const SizedBox(height: 10),
                       _buildImageThumbnail(
-                          '${ApiService.baseUrl}${item['completion_image_path'].toString().startsWith('/') ? item['completion_image_path'] : '/${item['completion_image_path']}'}',
+                          ApiService.resolveImageUrl(item['completion_image_path'].toString()),
                           height: 120),
                       if (item['completion_notes'] != null &&
                           (item['completion_notes'] as String).isNotEmpty) ...[

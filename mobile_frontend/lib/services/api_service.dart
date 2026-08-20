@@ -16,6 +16,21 @@ class ApiService {
   // FIX F-1: URL comes from AppConfig so it can be overridden at build time.
   static String get baseUrl => AppConfig.baseUrl;
 
+  /// Resolves an image path returned by the backend into a URL Image.network
+  /// can load.
+  ///
+  /// Uploaded photos may now be a full https:// URL (Vercel Blob) or a
+  /// relative /uploads/... path (local dev fallback) -- see
+  /// _save_bytes_to_upload in ai_backend/main.py. Blindly prefixing baseUrl
+  /// onto an already-absolute blob URL produces a broken address like
+  /// "http://api-host/https://…blob.vercel-storage.com/…", which is why blob
+  /// photos saved fine but never rendered in the app.
+  static String resolveImageUrl(String? path) {
+    if (path == null || path.isEmpty) return '';
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    return '$baseUrl/${path.startsWith('/') ? path.substring(1) : path}';
+  }
+
   /// Build auth headers with the current session token.
   static Map<String, String> get _authHeaders {
     final token = UserSession.instance.token;

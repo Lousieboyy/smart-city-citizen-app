@@ -1246,13 +1246,11 @@ class _MapViewScreenState extends State<MapViewScreen> with SingleTickerProvider
 
         String? beforeImageUrl;
         if (hasBeforeImage) {
-          final path = data['image_path'].toString();
-          beforeImageUrl = '${ApiService.baseUrl}/${path.startsWith('/') ? path.substring(1) : path}';
+          beforeImageUrl = ApiService.resolveImageUrl(data['image_path'].toString());
         }
         String? afterImageUrl;
         if (hasAfterImage) {
-          final path = data['completion_image_path'].toString();
-          afterImageUrl = '${ApiService.baseUrl}/${path.startsWith('/') ? path.substring(1) : path}';
+          afterImageUrl = ApiService.resolveImageUrl(data['completion_image_path'].toString());
         }
 
         // Local state for before/after toggle (captured by StatefulBuilder closure)

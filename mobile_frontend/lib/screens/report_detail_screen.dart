@@ -698,7 +698,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
   Widget _buildImageHeader() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final hasImage = _report['image_path'] != null && _report['image_path'].toString().isNotEmpty;
-    final imageUrl = hasImage ? '${ApiService.baseUrl}/${_report['image_path'].toString().replaceFirst(RegExp(r'^/'), '')}' : '';
+    final imageUrl = hasImage ? ApiService.resolveImageUrl(_report['image_path'].toString()) : '';
 
     return Container(
       width: double.infinity,
@@ -1554,7 +1554,7 @@ class _ReportDetailScreenState extends State<ReportDetailScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final double completionConfidence = double.tryParse((_report['completion_confidence'] ?? '0').replaceAll('%', '')) ?? 0.0;
     final hasCompImg = _report['completion_image_path'] != null && _report['completion_image_path'].toString().isNotEmpty;
-    final compImageUrl = hasCompImg ? '${ApiService.baseUrl}/${_report['completion_image_path'].toString().replaceFirst(RegExp(r'^/'), '')}' : '';
+    final compImageUrl = hasCompImg ? ApiService.resolveImageUrl(_report['completion_image_path'].toString()) : '';
 
     return GlassCard(
       child: Column(
