@@ -3657,7 +3657,7 @@ def legacy_authority_resolve(
 #  These MUST stay above the `GET /{catchall:path}` route below, which would
 #  otherwise shadow every GET registered after it.
 # ─────────────────────────────────────────────────────────────
-def _require_admin(token: dict) -> None:
+def _require_admin_token(token: dict) -> None:
     if token.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required.")
 
@@ -3693,7 +3693,7 @@ def dataset_stats(
     _token: dict = Depends(require_token),
 ):
     """Counts by status and class, plus the health of the class balance."""
-    _require_admin(_token)
+    _require_admin_token(_token)
 
     rows = db.query(DBDatasetSample.status, func.count(DBDatasetSample.id)).group_by(
         DBDatasetSample.status
@@ -3751,7 +3751,7 @@ def dataset_samples(
     _token: dict = Depends(require_token),
 ):
     """List collected samples, newest first. Defaults to the review queue."""
-    _require_admin(_token)
+    _require_admin_token(_token)
 
     query = db.query(DBDatasetSample)
     if status and status != "all":
@@ -3791,7 +3791,7 @@ def approve_sample(
     _token: dict = Depends(require_token),
 ):
     """Accept a sample into the training pool, optionally correcting its label."""
-    _require_admin(_token)
+    _require_admin_token(_token)
 
     sample = db.query(DBDatasetSample).filter(DBDatasetSample.id == sample_id).first()
     if not sample:
@@ -3842,7 +3842,7 @@ def reject_sample(
     duplicate detection — otherwise the same rejected image would be re-queued
     every time someone uploaded it again.
     """
-    _require_admin(_token)
+    _require_admin_token(_token)
 
     sample = db.query(DBDatasetSample).filter(DBDatasetSample.id == sample_id).first()
     if not sample:
@@ -3869,7 +3869,7 @@ def sync_dataset(
     _token: dict = Depends(require_token),
 ):
     """Push buffered approved/pending samples to the dataset repo in one commit."""
-    _require_admin(_token)
+    _require_admin_token(_token)
 
     if not dataset_store.is_configured():
         return {
