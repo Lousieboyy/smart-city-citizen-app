@@ -349,6 +349,28 @@ class DBReportUpvote(Base):
     report_id = Column("report_id", Integer, ForeignKey("Complaint.complaintID"), primary_key=True)
 
 
+class DBTeamNotification(Base):
+    """An admin's heads-up to a team about a location — not a dispatch.
+
+    Predictive Hotspots flags patterns built entirely from already-Resolved
+    reports (a recurring failure, or a systemic cross-category cluster), so
+    there is no open report to reassign. This is the "please go take a look"
+    signal that doesn't exist elsewhere: it reaches the team that owns the
+    category without touching any report's status or assignment.
+    """
+    __tablename__ = "TeamNotification"
+    id = Column(Integer, primary_key=True, index=True)
+    agency_id = Column(Integer, ForeignKey("Agency.agencyID"), nullable=False, index=True)
+    title = Column(String(256), nullable=False)
+    body = Column(String(2000), nullable=True)
+    address = Column(String(512), nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    created_by_staff_id = Column(Integer, ForeignKey("Staff.staffID"), nullable=True)
+    created_at = Column(String(64), nullable=True)
+    read = Column(Boolean, default=False)
+
+
 # ─────────────────────────────────────────────────────────────
 #  DATABASE INIT & MIGRATION TO NEW SCHEMA
 # ─────────────────────────────────────────────────────────────
@@ -1873,7 +1895,7 @@ def check_duplicate(
     lon_delta = radius_meters / (111000.0 * cos_lat)
 
     query = db.query(DBComplaint).filter(
-        DBComplaint.status != "Resolved",
+        DBComplaint.status.notin_(["Resolved", "Rejected"]),
         DBComplaint.latitude >= latitude - lat_delta,
         DBComplaint.latitude <= latitude + lat_delta,
         DBComplaint.longitude >= longitude - lon_delta,
@@ -3306,6 +3328,109 @@ def deny_transfer(
     db.commit()
     db.refresh(tr)
     return _serialize_transfer(db, tr)
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEAM NOTIFICATIONS (advisory — not tied to a report's status)
+# ─────────────────────────────────────────────────────────────
+class TeamNotificationCreate(BaseModel):
+    agency_id: int
+    title: str = Field(..., max_length=256)
+    body: str = Field("", max_length=2000)
+    address: Optional[str] = Field(None, max_length=512)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+def _serialize_team_notification(db: Session, n: DBTeamNotification) -> dict:
+    agency = db.query(DBAgency).filter(DBAgency.agencyID == n.agency_id).first()
+    creator = db.query(DBStaff).filter(DBStaff.id == n.created_by_staff_id).first()
+    return {
+        "id": n.id,
+        "agency_id": n.agency_id,
+        "agency_name": agency.name if agency else None,
+        "title": n.title,
+        "body": n.body,
+        "address": n.address,
+        "latitude": n.latitude,
+        "longitude": n.longitude,
+        "created_by": creator.username if creator else None,
+        "created_at": n.created_at,
+        "read": bool(n.read),
+    }
+
+
+@app.post("/notifications/team")
+def create_team_notification(
+    req: TeamNotificationCreate,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """Admin flags a location for a team to check — no report is touched.
+
+    Built for Predictive Hotspots (recurring failures / systemic advisories),
+    which is entirely built from Resolved reports. There's nothing open to
+    dispatch there, but the pattern is still worth a team's attention, so
+    this exists as its own advisory channel instead of overloading dispatch.
+    """
+    staff = _current_staff(db, _token)
+    if staff.role != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin may send team notifications.")
+
+    agency = db.query(DBAgency).filter(DBAgency.agencyID == req.agency_id).first()
+    if not agency:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    n = DBTeamNotification(
+        agency_id=req.agency_id,
+        title=req.title,
+        body=req.body,
+        address=req.address,
+        latitude=req.latitude,
+        longitude=req.longitude,
+        created_by_staff_id=staff.id,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    db.add(n)
+    db.commit()
+    db.refresh(n)
+    return _serialize_team_notification(db, n)
+
+
+@app.get("/notifications/team")
+def list_team_notifications(
+    unread_only: bool = False,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    """A worker/authority's own team's advisories; admin sees every team's."""
+    staff = _current_staff(db, _token)
+    query = db.query(DBTeamNotification)
+    if staff.role != "admin":
+        if not staff.agencyID:
+            return []
+        query = query.filter(DBTeamNotification.agency_id == staff.agencyID)
+    if unread_only:
+        query = query.filter(DBTeamNotification.read == false())
+    rows = query.order_by(DBTeamNotification.id.desc()).limit(100).all()
+    return [_serialize_team_notification(db, n) for n in rows]
+
+
+@app.post("/notifications/team/{notification_id}/read")
+def mark_team_notification_read(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    _token: dict = Depends(require_token),
+):
+    staff = _current_staff(db, _token)
+    n = db.query(DBTeamNotification).filter(DBTeamNotification.id == notification_id).first()
+    if not n:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    if staff.role != "admin" and staff.agencyID != n.agency_id:
+        raise HTTPException(status_code=403, detail="This notification is not for your team.")
+    n.read = True
+    db.commit()
+    return {"ok": True}
 
 
 # ─────────────────────────────────────────────────────────────
